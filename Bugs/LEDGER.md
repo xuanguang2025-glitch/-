@@ -25,6 +25,8 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-018 | 分区规则生效后，`--demo-build` 的硬编码坐标落在黄浦核心区，塔楼被合法拒绝，演示截图只剩构件而看起来像"建筑生成坏了" | green | `ValidationTests.find_spots` 自检定位；截图复核命令：`--demo-build=2 --view=-0.06,0,2` |
 | BUG-019 | `_check(what, got, want)` 被当作 `_check_that(cond, detail)` 使用，把 `"true"` 与 `"69407 -> 69411"` 相比，**通过的断言报 FAIL**（两个会话内复发两次） | green | `Pipeline/review.sh` R7（已用植入违规样本做正反例回归：有违规→FAIL，删除→PASS） |
 | BUG-020 | 商铺登记若采用"每次存放后全表重算"，1000 件压力测试退化为 O(n²) | green | 改为按对象登记/撤销（`_register`/`_unregister`）；`--bench-stress=1000` 的 `per_object` 与拆分前同量级 |
+| BUG-021 | 回滚接口先查版本链、后查"是否已是当前版本"，而当前版本不在链上——"回滚到已生效版本"返回误导性的 404 而不是 409 | green | `backend/test.mjs`：`回滚到当前版本被拒（不是空操作）` |
+| BUG-022 | 三角面预算总量若每次放置都全表求和，压力路径同样退化；且增量账本一旦漂移就无人发现 | green | `--create-test`：`增量预算与全表重算一致`（放置若干件后与逐件 recount 对比） |
 
 ## red 项的处理约定
 

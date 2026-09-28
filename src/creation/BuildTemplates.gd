@@ -72,6 +72,29 @@ static func count() -> int:
 	return TEMPLATES.size()
 
 
+static var _cost: Dictionary = {}
+
+
+## Measured cost of one template in triangles: built once into a throwaway context and cached.
+## The creation budget has to come from what the generators actually emit rather than from a
+## number that looked reasonable, which is what Phase 153 asks for.
+static func tri_cost(id: String) -> int:
+	if _cost.has(id):
+		return int(_cost[id])
+	var t := find(id)
+	if String(t["kind"]) == "road":
+		return 0
+	var ctx := ChunkCtx.new()
+	ctx.setup(11)
+	ctx.detail = true
+	build(ctx, t, rect(Vector2.ZERO, Vector2(t["size"]), 0.0), 0.5)
+	var n := 0
+	for f in [ctx.buildings, ctx.props, ctx.streets, ctx.plates, ctx.emissive]:
+		n += (f as MeshFusion).tri_count()
+	_cost[id] = n
+	return n
+
+
 ## The palette a tool shows. Buildings and props are separate lists because cycling through
 ## twelve towers to reach a bench is not an interface, and because the zone size cap only makes
 ## sense when the catalogue itself is scoped. Takes a plain bool rather than the Tool enum to
@@ -185,6 +208,19 @@ static func _prop(ctx: ChunkCtx, name: String, r: float) -> void:
 
 ## A straight segment with carriageway, centre dashes, kerbed sidewalks and street lamps,
 ## assembled from the same MeshFusion primitives the avenue builder uses.
+## A road's cost is its length, so it cannot come from a catalogue entry: build the exact
+## segment once and count what the generator emits.
+static func road_cost(a: Vector2, b: Vector2, w: float) -> int:
+	var ctx := ChunkCtx.new()
+	ctx.setup(11)
+	ctx.detail = true
+	build_road(ctx, a, b, w)
+	var n := 0
+	for f in [ctx.buildings, ctx.props, ctx.streets, ctx.plates, ctx.emissive]:
+		n += (f as MeshFusion).tri_count()
+	return n
+
+
 static func build_road(ctx: ChunkCtx, a: Vector2, b: Vector2, w: float) -> void:
 	var pts := PackedVector2Array([a, b])
 	var arcs := MeshFusion.arc_lengths(pts)

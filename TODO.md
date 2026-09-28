@@ -34,9 +34,14 @@
       验收：`--create-test` 断言"刷过后脚下高度改变且 undo 回到原值"，并出一张街景截图。
 - [ ] **NPC 编辑器**：玩家创建的 NPC 拥有稳定身份且不随人群预算回收。
       验收：`--create-test` 断言其进入 `crowd` 集合并可被 `nearest()` 命中。
-- [ ] **创作预算（Phase 153）**：单件与整体的 actor / 三角面 / tick 预算进入 `Validation`。
-      阈值必须来自实测——当前分区只约束体量与（未来的）高差，不约束件数。
-      验收：`--bench-stress` 超预算时按 `Reason.OVER_BUDGET` 拒绝，且拒绝原因可断言。
+- [x] **创作预算（Phase 153）**：三角面阈值由 `BuildTemplates.tri_cost` 实测导出，`Validation`
+      按 `OVER_BUDGET` 拒绝；总量增量维护并与全表重算比对。
+      验收已就位：`--create-test` 三条预算断言 + `[cost]` 实测表。
+- [x] **UGC 版本链与回滚（Phase 150）**：每版存真实字节，回滚可再回滚，仅作者可操作，
+      新版本与首发布共用同一套安全检查。验收：`backend/test.mjs` 16 条 UGC 断言。
+- [ ] **件数与 actor 预算**：当前只约束三角面。补 `MAX_ACTORS` / `MAX_OBJECTS` 后，
+      `--bench-stress` 的 1000 件必须仍在预算内，否则门槛与预算互相打架。
+      验收：`--create-test` 断言超件数按 `OVER_BUDGET` 拒绝并给出原因。
 - [ ] **3D 拖拽 Gizmo**：至少 XZ 平面拖拽 + 绕 Y 旋转手柄。
 - [ ] **大地图 UI**：正交相机渲染城区底图，支持缩放/旋转/搜索地标。
 - [ ] **主菜单**：继续/新游戏/设置/退出，替换掉"启动即进世界"。

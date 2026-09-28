@@ -49,15 +49,8 @@ var backend: BackendClient
 var _reason: int = Validation.Reason.OK
 var _cursor := Vector2(INF, INF)
 var _road_a: Variant = null
-
-## Templates that are businesses: placing one adds a shop to the district's retail market and
-## taking it away removes one. Only these two, because they are the ones with a shopfront that
-## a customer can walk into — an office tower employs people but sells nothing.
-const BUSINESS := {"mall": true, "shopfront": true}
-
 var sim: CitySim
-var _biz: Dictionary = {}	# district name -> {n: int, at: Vector2}
-var _biz_of: Dictionary = {}	# object id -> district name it registered in
+var _business := BusinessRegistry.new()
 
 var _todo_tools := {
 	Tool.TERRAIN: "地形工具",
@@ -160,7 +153,31 @@ func _half_footprint() -> float:
 
 
 func _validate(c: Vector2) -> int:
-	return Validation.check(c, _half_footprint(), _near_centers(), streamer)
+	return Validation.check(c, _half_footprint(), _near_centers(), streamer,
+		_projected_tris())
+
+
+## Triangles the world already holds from player content. Maintained incrementally by _store
+## and _destroy rather than summed per placement: a budget check that scanned the whole object
+## table would make every click cost what the last click cost, and the 1000-object stress pass
+## would go quadratic for the same reason the economy registration had to stay O(1).
+var _tris_total := 0
+
+## Each object's own measured cost, so removal subtracts exactly what was added.
+var _tris_of: Dictionary = {}
+
+
+## What the world would hold if the current template were accepted: existing objects at the
+## triangle count measured when they were built, the candidate at what its generator emits.
+## Nothing here is a guess about the renderer's cost.
+func _sim() -> CitySim:
+	if sim == null:
+		sim = get_tree().get_first_node_in_group("sim")
+	return sim
+
+
+func _projected_tris() -> int:
+	return _tris_total + BuildTemplates.tri_cost(String(_tpl()["id"]))
 
 
 func _rebuild_ghost() -> void:
@@ -238,7 +255,8 @@ func road_click(c: Vector2) -> int:
 		GameGlobals.say("道路太短，至少 12 m")
 		return -1
 	var mid := (a + c) * 0.5
-	_reason = Validation.check(mid, a.distance_to(c) * 0.5, _near_centers(), streamer)
+	_reason = Validation.check(mid, a.distance_to(c) * 0.5, _near_centers(), streamer,
+		_tris_total + BuildTemplates.road_cost(a, c, 12.0))
 	if _reason != Validation.Reason.OK:
 		GameGlobals.say("不能建造：%s" % Validation.label(_reason))
 		return -1
@@ -294,6 +312,15 @@ func _realize(st: Dictionary) -> void:
 		[ctx.streets, Assets.road_mat(2, true, 12.5), false],
 		[ctx.plates, Assets.ground_mat(), false],
 		[ctx.emissive, Assets.emissive_mat(), false]]
+	var tris := 0
+	for pair in bags:
+		var f: MeshFusion = pair[0]
+		tris += f.tri_count()
+		if f.is_empty():
+			continue
+	# Recorded per object rather than estimated from the template, because a road's cost is its
+	# length and a scaled tower's is not its unscaled catalogue entry.
+	st["tris"] = tris
 	for pair in bags:
 		var f: MeshFusion = pair[0]
 		if f.is_empty():
@@ -411,7 +438,9 @@ func _destroy(id: int) -> void:
 	if n != null:
 		n.free()
 	nodes.erase(id)
-	_unregister(id)
+	_business.destroy(id, sim)
+	_tris_total -= int(_tris_of.get(id, 0))
+	_tris_of.erase(id)
 	objects.erase(id)
 	bounds.erase(id)
 	if selected == id:
@@ -513,55 +542,17 @@ func _store(st: Dictionary) -> void:
 	var id := int(st["id"])
 	objects[id] = (st as Dictionary).duplicate()
 	_realize(objects[id])
-	_register(objects[id])
+	var t := int(objects[id].get("tris", 0))
+	_tris_total += t - int(_tris_of.get(id, 0))
+	_tris_of[id] = t
+	_sim()
+	_business.store(objects[id], sim)
 
 
 func _put(st: Dictionary) -> void:
 	_store(st)
 	if selected == int(st["id"]):
 		select(int(st["id"]))
-
-
-## Phase 136 / 168: the placed world is what the economy is told about. Registration is
-## per-object and symmetric — storing registers, destroying or replacing unregisters — so
-## undo, redo, dragging a shop across a district line and reloading a save all land on the
-## same ledger without a recount. Recounting on every store would turn the 1000-object stress
-## pass quadratic for no gain in correctness.
-func _register(st: Dictionary) -> void:
-	var id := int(st["id"])
-	_unregister(id)
-	if sim == null:
-		sim = get_tree().get_first_node_in_group("sim")
-	if sim == null or not BUSINESS.has(String(st["tpl"])):
-		return
-	var p := Vector2(float(st["x"]), float(st["z"]))
-	var dn := sim.district_at(p)
-	if not sim.districts.has(dn):
-		# A shop outside the simulated districts changes the map but not the ledger; saying so
-		# is the point of the check, otherwise the player would assume it registered.
-		GameGlobals.say("%s 不在城市经济模拟的街区内，未计入账本" % dn)
-		return
-	_biz_of[id] = dn
-	var e: Dictionary = _biz.get(dn, {"n": 0, "at": p})
-	e["n"] = int(e["n"]) + 1
-	_biz[dn] = e
-	if bool(sim.apply_player_action("open_shop", p)["ok"]):
-		GameGlobals.say("商铺已计入 %s 街区经济：就业 %d" % [dn, sim.total_employment()])
-
-
-func _unregister(id: int) -> void:
-	if not _biz_of.has(id):
-		return
-	var dn := String(_biz_of[id])
-	_biz_of.erase(id)
-	var e: Dictionary = _biz.get(dn, {})
-	if e.is_empty():
-		return
-	e["n"] = maxi(0, int(e["n"]) - 1)
-	if sim == null:
-		return
-	if bool(sim.apply_player_action("close_shop", Vector2(e["at"]))["ok"]):
-		GameGlobals.say("商铺已撤出 %s 街区经济：就业 %d" % [dn, sim.total_employment()])
 
 
 func _payload() -> Dictionary:
@@ -724,10 +715,11 @@ func clear_all() -> void:
 	_mark = null
 	_undo.clear()
 	_redo.clear()
+	_tris_total = 0
+	_tris_of.clear()
 	# Bypasses _destroy, so every registration has to be released here or a cleared city would
 	# keep employing staff for shops that no longer exist.
-	for id in _biz_of.keys():
-		_unregister(int(id))
+	_business.clear(_sim())
 	changed.emit()
 
 
@@ -739,6 +731,7 @@ func stats() -> Dictionary:
 		"active": active, "reason": Validation.label(_reason),
 		"zone": CreationZones.label(z),
 		"zone_max": CreationZones.max_half(_cursor) if has_cursor else 0.0,
+		"tris": _tris_total, "tris_max": Validation.MAX_TRIS,
 		"ok": _reason == Validation.Reason.OK, "road_pending": _road_a != null}
 
 

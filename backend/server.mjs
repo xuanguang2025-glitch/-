@@ -28,8 +28,52 @@ const UGC_MAX_TOTAL = 8 * 1024 * 1024;
 const UGC_DENY_EXT = ['.gd', '.gdc', '.cs', '.dll', '.so', '.dylib', '.exe', '.bat',
   '.cmd', '.ps1', '.sh', '.py', '.js', '.mjs', '.tscn', '.tres', '.godot'];
 const UGC_ALLOW_EXT = ['.json', '.txt', '.md', '.png', '.svg', '.wav', '.ogg'];
+// How many past versions a package keeps. Each version carries its own file contents so that
+// rollback restores bytes rather than metadata, so the chain has to be bounded.
+const UGC_KEEP_VERSIONS = 10;
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
+
+// Every check a package must pass, shared by first publication and by every later version.
+// A separate version endpoint that re-implemented none of these would let a player slip a .gd
+// through by publishing it as v2 of an already-approved package.
+function packageProblems(m, files, store) {
+  const problems = [];
+  if (!m || typeof m !== 'object') problems.push('缺少 manifest');
+  else for (const k of ['title', 'type', 'version'])
+    if (m[k] === undefined || m[k] === null || m[k] === '') problems.push(`manifest.${k} 必填`);
+  if (!files.length) problems.push('包内无文件');
+  if (files.length > 200) problems.push('文件数超过 200');
+  let total = 0;
+  for (const f of files) {
+    const p = String(f?.path ?? '');
+    const dot = p.toLowerCase().lastIndexOf('.');
+    const ext = dot < 0 ? '' : p.slice(dot);
+    const size = Buffer.byteLength(String(f?.content ?? ''), 'base64');
+    total += size;
+    if (p.includes('..') || p.startsWith('/') || /^[a-zA-Z]:/.test(p))
+      problems.push(`路径不安全：${p}`);
+    if (UGC_DENY_EXT.includes(ext)) problems.push(`禁止的可执行/场景类型：${p}`);
+    else if (!UGC_ALLOW_EXT.includes(ext)) problems.push(`未知文件类型：${p || '(空)'}`);
+    if (size > UGC_MAX_FILE) problems.push(`单文件超过 2 MiB：${p}`);
+  }
+  if (total > UGC_MAX_TOTAL) problems.push('包体总量超过 8 MiB');
+  if (m && typeof m === 'object') {
+    if (!Number.isFinite(m.triangles) || m.triangles < 0 || m.triangles > 2_000_000)
+      problems.push('manifest.triangles 必须存在且不超过 2,000,000');
+    if (!Number.isFinite(m.actors) || m.actors > 2000) problems.push('manifest.actors 超过 2000');
+    for (const d of m.dependencies ?? [])
+      if (!store.ugcByContentId(d)) problems.push(`依赖不存在：${d}`);
+  }
+  return problems;
+}
+
+// Responses never carry file contents: a listing that returned base64 for every version would
+// be dominated by payload the client did not ask for.
+const publicUgc = (rec) => ({ ...rec,
+  files: (rec.contents ?? []).map(f => f.path), contents: undefined,
+  versions: (rec.versions ?? []).map(v => ({ version: v.version, created_at: v.created_at,
+    declared: v.declared, files: (v.contents ?? []).map(f => f.path) })) });
 
 export function makeApp(opts = {}) {
   const store = opts.store ?? new Store(opts.data ?? 'backend/data');
@@ -178,42 +222,87 @@ export function makeApp(opts = {}) {
     'POST /v1/ugc/packages': (ctx) => {
       const m = ctx.body.manifest;
       const files = Array.isArray(ctx.body.files) ? ctx.body.files : [];
-      const problems = [];
-      if (!m || typeof m !== 'object') problems.push('缺少 manifest');
-      else for (const k of ['title', 'type', 'version'])
-        if (m[k] === undefined || m[k] === null || m[k] === '') problems.push(`manifest.${k} 必填`);
-      if (!files.length) problems.push('包内无文件');
-      if (files.length > 200) problems.push('文件数超过 200');
-      let total = 0;
-      for (const f of files) {
-        const p = String(f?.path ?? '');
-        const dot = p.toLowerCase().lastIndexOf('.');
-        const ext = dot < 0 ? '' : p.slice(dot);
-        total += Buffer.byteLength(String(f?.content ?? ''), 'base64');
-        if (p.includes('..') || p.startsWith('/') || /^[a-zA-Z]:/.test(p))
-          problems.push(`路径不安全：${p}`);
-        if (UGC_DENY_EXT.includes(ext)) problems.push(`禁止的可执行/场景类型：${p}`);
-        else if (!UGC_ALLOW_EXT.includes(ext)) problems.push(`未知文件类型：${p || '(空)'}`);
-        if (Buffer.byteLength(String(f?.content ?? ''), 'base64') > UGC_MAX_FILE)
-          problems.push(`单文件超过 2 MiB：${p}`);
-      }
-      if (total > UGC_MAX_TOTAL) problems.push('包体总量超过 8 MiB');
-      if (m && typeof m === 'object') {
-        if (!Number.isFinite(m.triangles) || m.triangles < 0 || m.triangles > 2_000_000)
-          problems.push('manifest.triangles 必须存在且不超过 2,000,000');
-        if (!Number.isFinite(m.actors) || m.actors > 2000) problems.push('manifest.actors 超过 2000');
-        for (const d of m.dependencies ?? [])
-          if (!store.ugcByContentId(d)) problems.push(`依赖不存在：${d}`);
-      }
+      const problems = packageProblems(m, files, store);
       const content_id = 'c_' + randomBytes(8).toString('hex');
       const rec = { content_id, creator_id: ctx.player, version: m?.version ?? 1,
         title: m?.title ?? null, type: m?.type ?? null, description: m?.description ?? null,
         dependencies: m?.dependencies ?? [], declared: { triangles: m?.triangles ?? null,
           actors: m?.actors ?? null },
         created_at: new Date().toISOString(), downloads: 0, likes: 0,
-        status: problems.length ? 'rejected' : 'published', problems };
+        status: problems.length ? 'rejected' : 'published', problems,
+        contents: files };
       store.ugcPut(rec, problems.length ? [] : files.map(f => f.path));
       return ctx.json(problems.length ? 422 : 201, rec);
+    },
+
+    // Phase 150 / 171: a package is a chain of versions, and rollback has to bring back the
+    // bytes rather than only the metadata — which is why each version carries its own file
+    // contents and the live record keeps `contents` alongside the historical path list.
+    // Publishing a new version means passing manifest.content_id; only the creator may, and the
+    // version number must move forward, so a stale client cannot quietly overwrite a newer one.
+    'POST /v1/ugc/versions': (ctx) => {
+      const m = ctx.body.manifest;
+      const files = Array.isArray(ctx.body.files) ? ctx.body.files : [];
+      const cid = String(m?.content_id ?? '');
+      const prev = store.ugcGet(cid);
+      if (!prev) return ctx.json(404, { error: 'not_found', content_id: cid });
+      if (prev.creator_id !== ctx.player)
+        return ctx.json(403, { error: 'only the creator may publish a new version' });
+      if (!Number.isFinite(m?.version) || Number(m.version) <= Number(prev.version))
+        return ctx.json(422, { error: `version 必须大于当前值 ${prev.version}` });
+      // Same gate as the first publication. Skipping it here would make "v2 of an approved
+      // package" the way to get a .gd past the scanner.
+      const problems = packageProblems(m, files, store);
+      if (problems.length) return ctx.json(422, { error: problems.join('；'), problems });
+      const live = { version: prev.version, created_at: prev.updated_at ?? prev.created_at,
+        declared: prev.declared, contents: prev.contents ?? [] };
+      const versions = [...(prev.versions ?? []), live].slice(-UGC_KEEP_VERSIONS);
+      const rec = { ...prev, version: m.version, title: m.title ?? prev.title,
+        type: m.type ?? prev.type, description: m.description ?? prev.description,
+        declared: { triangles: m.triangles ?? prev.declared?.triangles ?? null,
+          actors: m.actors ?? prev.declared?.actors ?? null },
+        dependencies: m.dependencies ?? prev.dependencies ?? [],
+        updated_at: new Date().toISOString(), status: 'published', problems: [],
+        versions, contents: files };
+      store.ugcPut(rec, files.map(f => f.path));
+      return ctx.json(201, publicUgc(rec));
+    },
+
+    'GET /v1/ugc/versions': (ctx) => {
+      const r = store.ugcGet(String(ctx.query.get('content_id') ?? ''));
+      if (!r) return ctx.json(404, { error: 'not_found' });
+      const chain = [...(r.versions ?? []), { version: r.version,
+        created_at: r.updated_at ?? r.created_at, declared: r.declared,
+        contents: r.contents ?? [] }];
+      return ctx.json(200, { content_id: r.content_id, live: r.version, creator: r.creator_id,
+        versions: chain.map(v => ({ version: v.version, created_at: v.created_at,
+          declared: v.declared, files: (v.contents ?? []).map(f => f.path) }))
+          .sort((a, b) => a.version - b.version) });
+    },
+
+    'POST /v1/ugc/rollback': (ctx) => {
+      const r = store.ugcGet(String(ctx.body.content_id ?? ''));
+      if (!r) return ctx.json(404, { error: 'not_found' });
+      if (r.creator_id !== ctx.player)
+        return ctx.json(403, { error: 'only the creator may roll back' });
+      const want = Number(ctx.body.version);
+      // Checked before the chain: the live version is not in `versions`, so looking it up
+      // first turns "already on this version" into a misleading 404.
+      if (Number(r.version) === want) return ctx.json(409, { error: '该版本已经是当前版本' });
+      const idx = (r.versions ?? []).findIndex(v => Number(v.version) === want);
+      if (idx < 0) return ctx.json(404, { error: `没有版本 ${ctx.body.version} 可回滚` });
+      const target = r.versions[idx];
+      // The version being displaced goes back into the chain, so a rollback is itself
+      // reversible instead of a one-way jump.
+      const displaced = { version: r.version, created_at: r.updated_at ?? r.created_at,
+        declared: r.declared, contents: r.contents ?? [] };
+      const versions = [...r.versions.slice(0, idx), ...r.versions.slice(idx + 1), displaced]
+        .slice(-UGC_KEEP_VERSIONS);
+      const rec = { ...r, version: target.version, declared: target.declared,
+        contents: target.contents ?? [], versions,
+        updated_at: new Date().toISOString(), rollback_from: r.version };
+      store.ugcPut(rec, (target.contents ?? []).map(f => f.path));
+      return ctx.json(200, publicUgc(rec));
     },
 
     'GET /v1/ugc/browse': (ctx) => {

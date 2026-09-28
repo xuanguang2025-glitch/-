@@ -500,10 +500,33 @@ func _create_test() -> void:
 	_check("重载后仍是装饰构件", kept, true)
 	creation.clear_all()
 
-	# Phase 136 / 168: the point of the whole creation stack is that building something changes
-	# the city, so this asserts the ledger moves because a player placed a shop - and that undo
-	# and clear_all move it back. A shop count in a dictionary that the economy never hears
-	# about would pass every editor test above and still be a fake.
+	# Phase 153: a budget is only real if its threshold came from measurement, so every
+	# catalogue entry is built once into a throwaway context and its actual triangle count is
+	# reported. These numbers are what Validation.MAX_TRIS is set against.
+	var line := "[cost.building]"
+	var bsum := 0
+	for t in BuildTemplates.TEMPLATES:
+		var n := BuildTemplates.tri_cost(String(t["id"]))
+		bsum += n
+		line += " %s=%d" % [String(t["id"]), n]
+	print(line)
+	line = "[cost.decor]"
+	var dsum := 0
+	for t in BuildTemplates.DECOR:
+		var m := BuildTemplates.tri_cost(String(t["id"]))
+		dsum += m
+		line += " %s=%d" % [String(t["id"]), m]
+	print(line)
+	print("[cost] 建筑 12 件合计=%d 构件 9 件合计=%d 预算上限=%d" % [
+		bsum, dsum, Validation.MAX_TRIS])
+	_check("模板成本被真实测量", BuildTemplates.tri_cost("office_tower") > 0, true)
+	var cspot := ValidationTests.find_spots(1, 20.0, streamer)
+	_check("预算将满时按预算拒绝",
+		cspot.size() > 0 and Validation.check(cspot[0], 20.0, [], streamer,
+			Validation.MAX_TRIS + 1) == Validation.Reason.OVER_BUDGET, true)
+	_check("预算未满时不受预算影响",
+		cspot.size() > 0 and Validation.check(cspot[0], 20.0, [], streamer,
+			Validation.MAX_TRIS - 1) == Validation.Reason.OK, true)
 	var mall_i := 0
 	var shop_i := 0
 	for i in BuildTemplates.TEMPLATES.size():
@@ -511,6 +534,32 @@ func _create_test() -> void:
 			mall_i = i
 		if String(BuildTemplates.TEMPLATES[i]["id"]) == "shopfront":
 			shop_i = i
+	creation.tpl_i = mall_i
+	var tid := -1
+	if not cspot.is_empty():
+		tid = creation.place(cspot[0])
+	_check("作品记录自己的实测三角面",
+		tid >= 0 and int(creation.objects[tid]["tris"]) == BuildTemplates.tri_cost("mall"),
+		true)
+	# The budget total is maintained incrementally, which is exactly the kind of bookkeeping
+	# that drifts silently. So: place a few, move one, undo one, then demand that the running
+	# figure still equals a straight recount of what the objects say they cost.
+	var xspots := ValidationTests.find_spots(3, 30.0, streamer)
+	for i in xspots.size():
+		creation.tpl_i = i
+		creation.place(xspots[i])
+	var recount := 0
+	for k in creation.objects.keys():
+		recount += int((creation.objects[k] as Dictionary).get("tris", 0))
+	_check_that("增量预算与全表重算一致", creation._tris_total == recount,
+		"%d vs %d" % [creation._tris_total, recount])
+	creation.clear_all()
+	_check("清空后预算归零", creation._tris_total, 0)
+
+	# Phase 136 / 168: the point of the whole creation stack is that building something changes
+	# the city, so this asserts the ledger moves because a player placed a shop - and that undo
+	# and clear_all move it back. A shop count in a dictionary that the economy never hears
+	# about would pass every editor test above and still be a fake.
 	creation._set_tool(CreationSystem.Tool.BUILDING)
 	# A commercial placement only reaches the ledger where a ledger exists: CitySim bootstraps
 	# the named districts the census found, and the official core refuses anything mall-sized,

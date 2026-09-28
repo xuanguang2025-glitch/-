@@ -9,7 +9,7 @@ extends RefCounted
 
 enum Reason {
 	OK, OFF_MAP, WATER, BANK, PARK, MAJOR_ROAD, LOCAL_STREET, GENERATED_BUILDING,
-	OVERLAP, ZONE_SIZE,
+	OVERLAP, ZONE_SIZE, OVER_BUDGET,
 }
 
 const NAMES := {
@@ -23,7 +23,17 @@ const NAMES := {
 	Reason.GENERATED_BUILDING: "已有建筑",
 	Reason.OVERLAP: "与你的作品重叠",
 	Reason.ZONE_SIZE: "分区限制：此处只允许小体量创作",
+	Reason.OVER_BUDGET: "创作预算已满（三角面）",
 }
+
+## Triangle ceiling for all player content in the world at once (Phase 153). Measured, not
+## chosen: `BuildTemplates.tri_cost` builds every catalogue entry once into a throwaway context
+## and counts what the generators actually emit — 12 buildings total 4834 triangles (~400 each,
+## because window grids are drawn by the facade shader rather than by geometry) and 9 street
+## props total 472. The 1000-object stress pass therefore costs about 400 k, and this ceiling
+## is ~3.7 k mixed objects: loose enough that the gate still passes by a wide margin, tight
+## enough that "keep building" cannot run the world into the ground.
+const MAX_TRIS := 1500000
 
 ## How far a footprint must sit from each hazard. Water and banks are generous because the
 ## terrain drops away there and a tower would float.
@@ -37,7 +47,10 @@ static func label(r: int) -> String:
 
 
 ## near: Array of Vector2 already-placed centres; radius: their combined clearance.
-static func check(c: Vector2, half: float, near: Array, streamer: WorldStreamer) -> int:
+## tris_projected: total triangles the world would hold if this placement were accepted, or -1
+## when the caller is not asking about a whole-world budget (a spot probe, a search grid).
+static func check(c: Vector2, half: float, near: Array, streamer: WorldStreamer,
+		tris_projected := -1) -> int:
 	if absf(c.x) > GameGlobals.WORLD_HALF - half or absf(c.y) > GameGlobals.WORLD_HALF - half:
 		return Reason.OFF_MAP
 	var d: float = CityData.water_dist_q(c)
@@ -58,4 +71,6 @@ static func check(c: Vector2, half: float, near: Array, streamer: WorldStreamer)
 	for p in near:
 		if c.distance_to(p) < half * 1.35:
 			return Reason.OVERLAP
+	if tris_projected >= 0 and tris_projected > MAX_TRIS:
+		return Reason.OVER_BUDGET
 	return Reason.OK

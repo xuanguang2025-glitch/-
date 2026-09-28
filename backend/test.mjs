@@ -138,6 +138,47 @@ const cid = r.json.content_id;
 r = await call('POST', '/v1/ugc/install', { token: tok, body: { content_id: cid } });
 ok('安装计数递增', r.json.downloads === 1);
 
+// --- Phase 150 / 171: version chain and rollback ---
+r = await call('POST', '/v1/ugc/versions', { token: tok, body: pkg(
+  [{ path: 'a.json', content: b64('{"v":2}') }], { content_id: cid, version: 2 }) });
+ok('新版本发布 201', r.status === 201 && r.json.version === 2, JSON.stringify(r.json.errors ?? ''));
+r = await call('POST', '/v1/ugc/versions', { token: tok, body: pkg(
+  [{ path: 'a.json', content: b64('x') }], { content_id: cid, version: 2 }) });
+ok('版本号不前进被拒', r.status === 422, String(r.status));
+// The hole this closes: a version endpoint that skipped the scanner would let a player get a
+// .gd published as "v2 of an approved package".
+r = await call('POST', '/v1/ugc/versions', { token: tok, body: pkg(
+  [{ path: 'evil.gd', content: b64('func _ready(): pass') }], { content_id: cid, version: 3 }) });
+ok('新版本同样必须过安全检查', r.status === 422 && /可执行/.test(String(r.json.error)),
+  String(r.status));
+r = await call('GET', `/v1/ugc/versions?content_id=${cid}`);
+ok('版本链含两个版本且 live=2',
+  r.json.versions?.length === 2 && r.json.live === 2,
+  JSON.stringify(r.json.versions?.map(v => v.version)));
+ok('版本列表只给路径不给字节',
+  (r.json.versions ?? []).every(v => Array.isArray(v.files) && !('contents' in v)));
+r = await call('POST', '/v1/ugc/rollback', { token: tok, body: { content_id: cid, version: 1 } });
+ok('回滚到 v1', r.status === 200 && r.json.version === 1, String(r.status));
+const back = JSON.parse(readFileSync(store.ugcPath(cid), 'utf8'));
+ok('回滚恢复的是真实内容而非仅元数据',
+  Buffer.from(back.contents[0].content, 'base64').toString() === '{"ok":1}',
+  Buffer.from(back.contents[0].content, 'base64').toString());
+ok('被替换的版本仍在链上（回滚可再回滚）',
+  (back.versions ?? []).some(v => v.version === 2),
+  JSON.stringify((back.versions ?? []).map(v => v.version)));
+r = await call('POST', '/v1/ugc/rollback', { token: tok, body: { content_id: cid, version: 77 } });
+ok('回滚到不存在的版本 404', r.status === 404, String(r.status));
+r = await call('POST', '/v1/ugc/rollback', { token: tok, body: { content_id: cid, version: 1 } });
+ok('回滚到当前版本被拒（不是空操作）', r.status === 409, String(r.status));
+const other = await call('POST', '/v1/accounts',
+  { body: { display_name: '另一个玩家', secret: 'another-secret-1' } });
+r = await call('POST', '/v1/ugc/rollback',
+  { token: other.json.session_token, body: { content_id: cid, version: 2 } });
+ok('非作者不能回滚', r.status === 403, String(r.status));
+r = await call('POST', '/v1/ugc/versions', { token: other.json.session_token, body: pkg(
+  [{ path: 'a.json', content: b64('{}') }], { content_id: cid, version: 5 }) });
+ok('非作者不能发布新版本', r.status === 403, String(r.status));
+
 // Phase 55: pure download order would freeze a fresh creator out. Give an old package a
 // huge count and check a brand-new one still outranks it under trending.
 const oldRec = JSON.parse(readFileSync(store.ugcPath(cid), 'utf8'));
