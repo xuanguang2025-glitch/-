@@ -47,10 +47,20 @@ var backend: BackendClient
 ## Result of the last validation pass, surfaced in the HUD so a refused placement is
 ## attributable rather than mysterious.
 var _reason: int = Validation.Reason.OK
+var _cursor := Vector2(INF, INF)
 var _road_a: Variant = null
 
+## Templates that are businesses: placing one adds a shop to the district's retail market and
+## taking it away removes one. Only these two, because they are the ones with a shopfront that
+## a customer can walk into — an office tower employs people but sells nothing.
+const BUSINESS := {"mall": true, "shopfront": true}
+
+var sim: CitySim
+var _biz: Dictionary = {}	# district name -> {n: int, at: Vector2}
+var _biz_of: Dictionary = {}	# object id -> district name it registered in
+
 var _todo_tools := {
-	Tool.TERRAIN: "地形工具", Tool.DECOR: "装饰工具",
+	Tool.TERRAIN: "地形工具",
 	Tool.VEHICLE: "车辆工具", Tool.NPC: "NPC 工具", Tool.QUEST: "任务工具",
 }
 
@@ -72,6 +82,7 @@ func _ready() -> void:
 	_ghost_mat.albedo_color = Color(0.25, 0.85, 1.0, 0.32)
 	_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_ghost_mat.no_depth_test = true
+	sim = get_tree().get_first_node_in_group("sim")
 	load_edits()
 
 
@@ -93,14 +104,24 @@ func set_active(on: bool) -> void:
 
 
 # --- Templates --------------------------------------------------------------
+## The catalogue the current tool cycles through. Buildings and street props are separate
+## palettes, so Tab on the decoration tool walks benches and planters rather than twelve towers.
+func _pal() -> Array:
+	return BuildTemplates.palette(tool == Tool.DECOR)
+
+
 func _tpl() -> Dictionary:
-	return BuildTemplates.get_tpl(tpl_i)
+	return BuildTemplates.get_at(_pal(), tpl_i)
 
 
 ## Scale applies to the footprint and to the height, which for the floor-count generators
 ## means the building gains and loses storeys rather than growing floor-to-floor thickness.
+## Street props are excluded: a bench is placed at its true metric size, and letting the scale
+## control lie about what would appear would make the ghost disagree with the built object.
 func _tpl_scaled(sc: float) -> Dictionary:
 	var t: Dictionary = _tpl().duplicate()
+	if String(t["kind"]) == "prop":
+		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
 	return t
@@ -108,6 +129,8 @@ func _tpl_scaled(sc: float) -> Dictionary:
 
 func _tpl_of(id: String, sc: float) -> Dictionary:
 	var t: Dictionary = BuildTemplates.find(id).duplicate()
+	if String(t["kind"]) == "prop":
+		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
 	return t
@@ -118,6 +141,7 @@ func _tpl_of(id: String, sc: float) -> Dictionary:
 ## not cheap enough to redo on every mouse move. Validation runs every frame instead, so the
 ## preview turns red the moment it crosses into the river or onto a boulevard.
 func _update_ghost(c: Vector2) -> void:
+	_cursor = c
 	var key := "%s|%d|%d" % [String(_tpl()["id"]), int(round(yaw * 100)),
 		int(round(obj_scale * 100))]
 	if key != _ghost_key:
@@ -192,8 +216,9 @@ func place(c: Vector2) -> int:
 	var t := _tpl()
 	var st := {"id": id, "tpl": String(t["id"]), "x": c.x, "z": c.y,
 		"yaw": yaw, "scale": obj_scale}
-	objects[id] = st
-	_realize(st)
+	# Through _put, not around it: that is where the economy learns that a business exists, and
+	# a second insertion path would let a click place something the ledger never sees.
+	_put(st)
 	_undo.append({"op": "add", "obj": st.duplicate()})
 	_redo.clear()
 	changed.emit()
@@ -221,8 +246,7 @@ func road_click(c: Vector2) -> int:
 	next_id += 1
 	var st := {"id": id, "tpl": "road", "x": a.x, "z": a.y,
 		"x2": c.x, "z2": c.y, "yaw": 0.0, "scale": 1.0, "width": 12.0}
-	objects[id] = st
-	_realize(st)
+	_store(st)
 	_undo.append({"op": "add", "obj": st.duplicate()})
 	_redo.clear()
 	changed.emit()
@@ -340,6 +364,14 @@ func select(id: int) -> void:
 	var st: Dictionary = objects[id]
 	yaw = float(st["yaw"])
 	obj_scale = float(st["scale"])
+	## Selecting an object follows its template, and templates live in two palettes, so the
+	## tool has to move with the selection — otherwise Tab after picking a bench would cycle
+	## towers and the next placement would not be the thing the player was looking at.
+	var is_prop := String(BuildTemplates.find(String(st["tpl"]))["kind"]) == "prop"
+	if is_prop and tool != Tool.DECOR:
+		_set_tool(Tool.DECOR)
+	elif not is_prop and tool == Tool.DECOR:
+		_set_tool(Tool.BUILDING)
 	tpl_i = _index_of(String(st["tpl"]))
 	var box: AABB = bounds.get(id, AABB())
 	if box.size == Vector3.ZERO:
@@ -354,8 +386,9 @@ func select(id: int) -> void:
 
 
 func _index_of(tpl_id: String) -> int:
-	for i in BuildTemplates.TEMPLATES.size():
-		if String(BuildTemplates.TEMPLATES[i]["id"]) == tpl_id:
+	var pal := _pal()
+	for i in pal.size():
+		if String(pal[i]["id"]) == tpl_id:
 			return i
 	return 0
 
@@ -378,6 +411,7 @@ func _destroy(id: int) -> void:
 	if n != null:
 		n.free()
 	nodes.erase(id)
+	_unregister(id)
 	objects.erase(id)
 	bounds.erase(id)
 	if selected == id:
@@ -398,8 +432,7 @@ func duplicate_selected() -> void:
 	else:
 		var t := _tpl_of(String(st["tpl"]), float(st["scale"]))
 		st["x"] = float(st["x"]) + Vector2(t["size"]).x * 0.75
-	objects[int(st["id"])] = st
-	_realize(st)
+	_store(st)
 	_undo.append({"op": "add", "obj": st.duplicate()})
 	_redo.clear()
 	select(int(st["id"]))
@@ -426,8 +459,7 @@ func _edit_selected(fn: Callable) -> void:
 	var before := _snapshot(selected)
 	var after := before.duplicate()
 	fn.call(after)
-	objects[selected] = after
-	_realize(after)
+	_store(after)
 	_undo.append({"op": "mod", "before": before, "after": after.duplicate()})
 	_redo.clear()
 	select(selected)
@@ -474,12 +506,62 @@ func _apply(op: Dictionary, forward: bool) -> void:
 			_put(op["after"] if forward else op["before"])
 
 
-func _put(st: Dictionary) -> void:
+## The single place an object record becomes scene geometry. Every mutation path — click,
+## duplicate, edit, undo, reload — goes through here, so the economy cannot be told about a
+## shop by one path and not by another.
+func _store(st: Dictionary) -> void:
 	var id := int(st["id"])
 	objects[id] = (st as Dictionary).duplicate()
 	_realize(objects[id])
-	if selected == id:
-		select(id)
+	_register(objects[id])
+
+
+func _put(st: Dictionary) -> void:
+	_store(st)
+	if selected == int(st["id"]):
+		select(int(st["id"]))
+
+
+## Phase 136 / 168: the placed world is what the economy is told about. Registration is
+## per-object and symmetric — storing registers, destroying or replacing unregisters — so
+## undo, redo, dragging a shop across a district line and reloading a save all land on the
+## same ledger without a recount. Recounting on every store would turn the 1000-object stress
+## pass quadratic for no gain in correctness.
+func _register(st: Dictionary) -> void:
+	var id := int(st["id"])
+	_unregister(id)
+	if sim == null:
+		sim = get_tree().get_first_node_in_group("sim")
+	if sim == null or not BUSINESS.has(String(st["tpl"])):
+		return
+	var p := Vector2(float(st["x"]), float(st["z"]))
+	var dn := sim.district_at(p)
+	if not sim.districts.has(dn):
+		# A shop outside the simulated districts changes the map but not the ledger; saying so
+		# is the point of the check, otherwise the player would assume it registered.
+		GameGlobals.say("%s 不在城市经济模拟的街区内，未计入账本" % dn)
+		return
+	_biz_of[id] = dn
+	var e: Dictionary = _biz.get(dn, {"n": 0, "at": p})
+	e["n"] = int(e["n"]) + 1
+	_biz[dn] = e
+	if bool(sim.apply_player_action("open_shop", p)["ok"]):
+		GameGlobals.say("商铺已计入 %s 街区经济：就业 %d" % [dn, sim.total_employment()])
+
+
+func _unregister(id: int) -> void:
+	if not _biz_of.has(id):
+		return
+	var dn := String(_biz_of[id])
+	_biz_of.erase(id)
+	var e: Dictionary = _biz.get(dn, {})
+	if e.is_empty():
+		return
+	e["n"] = maxi(0, int(e["n"]) - 1)
+	if sim == null:
+		return
+	if bool(sim.apply_player_action("close_shop", Vector2(e["at"]))["ok"]):
+		GameGlobals.say("商铺已撤出 %s 街区经济：就业 %d" % [dn, sim.total_employment()])
 
 
 func _payload() -> Dictionary:
@@ -515,8 +597,7 @@ func _apply_payload(p: Dictionary) -> int:
 	for raw in p.get("objects", []):
 		var st := _normalize(raw)
 		var id := int(st["id"])
-		objects[id] = st
-		_realize(st)
+		_store(st)
 		next_id = maxi(next_id, id + 1)
 		n += 1
 	return n
@@ -643,13 +724,21 @@ func clear_all() -> void:
 	_mark = null
 	_undo.clear()
 	_redo.clear()
+	# Bypasses _destroy, so every registration has to be released here or a cleared city would
+	# keep employing staff for shops that no longer exist.
+	for id in _biz_of.keys():
+		_unregister(int(id))
 	changed.emit()
 
 
 func stats() -> Dictionary:
+	var has_cursor := _cursor != Vector2(INF, INF)
+	var z: int = CreationZones.zone_at(_cursor) if has_cursor else CreationZones.Zone.PRIVATE
 	return {"objects": objects.size(), "selected": selected, "tool": tool,
 		"tpl": String(_tpl()["name"]), "undo": _undo.size(), "redo": _redo.size(),
 		"active": active, "reason": Validation.label(_reason),
+		"zone": CreationZones.label(z),
+		"zone_max": CreationZones.max_half(_cursor) if has_cursor else 0.0,
 		"ok": _reason == Validation.Reason.OK, "road_pending": _road_a != null}
 
 
@@ -683,7 +772,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_BRACKETRIGHT:
 				scale_selected(SCALE_STEP)
 			KEY_TAB:
-				tpl_i = (tpl_i + 1) % BuildTemplates.count()
+				tpl_i = (tpl_i + 1) % _pal().size()
 				_ghost_key = ""
 				GameGlobals.say("模板：%s" % String(_tpl()["name"]))
 			KEY_UP:
@@ -726,12 +815,17 @@ func _set_tool(t: int) -> void:
 	tool = t
 	_road_a = null
 	_ghost_key = ""
+	var pal := BuildTemplates.palette(t == Tool.DECOR)
+	tpl_i = clampi(tpl_i, 0, pal.size() - 1)
 	if t == Tool.ROAD:
 		GameGlobals.say("道路工具 — 点两次成一段（车道 + 人行道 + 路灯），右键取消")
+	elif t == Tool.DECOR:
+		GameGlobals.say("装饰工具 — %d 种街道构件，Tab 换构件（构件按真实尺寸放置，不参与缩放）"
+			% pal.size())
 	elif _todo_tools.has(t):
-		GameGlobals.say("%s — 待实现（当前仅建筑与道路工具可用）" % String(_todo_tools[t]))
+		GameGlobals.say("%s — 待实现（当前可用：建筑、道路、装饰）" % String(_todo_tools[t]))
 	else:
-		GameGlobals.say("工具：建筑 — Tab 换模板，共 %d 种" % BuildTemplates.count())
+		GameGlobals.say("工具：建筑 — Tab 换模板，共 %d 种" % pal.size())
 
 
 func _process(_delta: float) -> void:

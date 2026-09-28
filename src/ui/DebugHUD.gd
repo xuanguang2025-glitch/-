@@ -87,6 +87,7 @@ func feed(delta: float, s: Dictionary) -> void:
 		lines.append("创造模式 · 工具 %s   模板 %s" % [tn, cr["tpl"]])
 		lines.append("作品 %d   选中 #%d   撤销栈 %d/%d" % [cr["objects"], cr["selected"],
 			cr["undo"], cr["redo"]])
+		lines.append("分区 %s   体量上限 %.0f m" % [cr["zone"], float(cr["zone_max"])])
 		var ok: bool = bool(cr.get("ok", true))
 		lines.append("校验：%s%s" % [cr["reason"], "" if ok else "  ← 此处不可建造"] +
 			("   (起点已定)" if bool(cr.get("road_pending", false)) else ""))

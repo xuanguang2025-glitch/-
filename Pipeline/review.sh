@@ -38,6 +38,21 @@ if [ -n "$bad" ]; then hit "R5 TODO/FIXME 未挂 BUG ID" "$bad"; else note pass 
 bad=$(grep -rln 'extends Node' "$SRC" 2>/dev/null | xargs grep -ln 'func _init(' 2>/dev/null || true)
 if [ -n "$bad" ]; then hit "R6 Node 子类使用 _init" "$bad"; else note pass "R6 构造函数命名安全"; fi
 
+# R7  _check(what, got, want) compares two values; _check_that(what, cond, detail) asserts a
+#     condition. Handing _check a formatted detail compares "true" against "69407 -> 69411" and
+#     fails a passing test — the same call was misused twice in two sessions, so it is a rule.
+#     The shape is a format string followed by the % operator inside a _check( call; a plain
+#     string want-value such as _check("tpl stored", got, "road") stays legal, and the GDScript
+#     `->` in a signature must not be mistaken for it.
+bad=$(awk '
+  /_check\("/ {
+    buf=$0
+    d=gsub(/\(/,"(",buf)-gsub(/\)/,")",buf)
+    while(d>0 && (getline nl)>0){ buf=buf " " nl; d+=gsub(/\(/,"(",nl)-gsub(/\)/,")",nl) }
+    if(buf ~ /"[^"]*%[ds][^"]*"[ \t]*%/) print FILENAME": "substr(buf,1,110)
+  }' $(find "$SRC" -name '*.gd' -print) 2>/dev/null || true)
+if [ -n "$bad" ]; then hit "R7 _check 被当成 _check_that 使用" "$bad"; else note pass "R7 断言函数用法正确"; fi
+
 echo "-----"
-if [ "$FAIL" -eq 0 ]; then echo "review: PASS (6 rules)"; else echo "review: FAIL"; fi
+if [ "$FAIL" -eq 0 ]; then echo "review: PASS (7 rules)"; else echo "review: FAIL"; fi
 exit $FAIL

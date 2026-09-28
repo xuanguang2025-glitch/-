@@ -11,6 +11,9 @@
 #   * a 2 % price step truncated to zero at small prices and left every price frozen forever
 #   * require() once printed GATE-FAIL without touching the exit status, so an unparseable
 #     metric could report PIPELINE: PASS one line under its own failure
+#   * a newline-eating edit spliced a function signature onto its first statement; step 1
+#     (`--editor --quit`) did NOT report it, because scripts that are never instantiated are
+#     not parsed there. Step 2's headless boot is what actually gates compilation.
 #   * a median over 3 samples still reported 36.8 ms where 5 consecutive idle samples give
 #     17.7-18.0 ms, so the timing gates take 5 samples: one contaminated run must not be able
 #     to carry the median by itself

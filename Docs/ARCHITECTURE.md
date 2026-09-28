@@ -24,6 +24,9 @@
       ├── WeatherSystem (GPUParticles3D)
       ├── FarSilhouette (HLOD 替身)
       ├── CreationSystem ─► Validation ─► BuildTemplates ─► CellProgram
+      │        │                └─► CreationZones（分区权限：体量上限 / 地形上限）
+      │        ├─► _store ─► _register / _unregister ─► CitySim（街区账本）
+      │        └─► Props（9 种街道构件，与街区同源 MeshFusion）
       ├── CitySim  ◄── 整点推进（随钟点，从不每帧）        src/sim/CitySim.gd
       │      │  区级状态：人口/劳动力/商铺/三桶现金/压力/客流/出行需求
       │      ├──► CrowdSystem.crowd_factor_at  → 街道行人预算
@@ -54,6 +57,10 @@
 | 就业是商铺数的折叠，不是独立数字 | `CitySim.reconcile_jobs` | `--sim-test` 折叠断言 |
 | 街道密度是经济的下游 | `crowd_factor_at` / `car_factor_at` | `--sim-test` 接入断言（未接入会恒 1.0 而无法被发现） |
 | 模拟随钟点整点推进，绝不每帧 | `GameRoot._process` 的 `_sim_hour` 边沿 | `Pipeline/run.sh` 第 6 步 `[sim] day` 计数 |
+| 一切世界内容只经 `_store` 进入 | `CreationSystem._store` 是唯一插入点 | BUG-017（`place()` 曾绕过它，账本对玩家的商铺一无所知） |
+| 创作权限由城市自身派生，不是手写坐标表 | `CreationZones.zone_at`（建成度 + 地标距离） | `--validate-test` 同一坐标"小体量放行 / 大体量被拒" |
+| 分区上限必须真的拒绝东西 | `Validation.check` 的 `ZONE_SIZE` | `--validate-test`：`核心区大体量被分区拒绝` |
+| 构件按真实公制尺寸放置，缩放对其不生效 | `BuildTemplates._tpl_of` 对 `kind=="prop"` 短路 | `--create-test`：`构件不参与缩放` |
 
 ## 2. 后端（`backend/`）
 

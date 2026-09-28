@@ -7,7 +7,10 @@ extends RefCounted
 ## back as an enum rather than a bool because the editor has to say *why* a spot is refused,
 ## and because a rejected placement is only debuggable if it is attributed.
 
-enum Reason { OK, OFF_MAP, WATER, BANK, PARK, MAJOR_ROAD, LOCAL_STREET, GENERATED_BUILDING, OVERLAP }
+enum Reason {
+	OK, OFF_MAP, WATER, BANK, PARK, MAJOR_ROAD, LOCAL_STREET, GENERATED_BUILDING,
+	OVERLAP, ZONE_SIZE,
+}
 
 const NAMES := {
 	Reason.OK: "可建造",
@@ -19,6 +22,7 @@ const NAMES := {
 	Reason.LOCAL_STREET: "街区道路",
 	Reason.GENERATED_BUILDING: "已有建筑",
 	Reason.OVERLAP: "与你的作品重叠",
+	Reason.ZONE_SIZE: "分区限制：此处只允许小体量创作",
 }
 
 ## How far a footprint must sit from each hazard. Water and banks are generous because the
@@ -47,6 +51,10 @@ static func check(c: Vector2, half: float, near: Array, streamer: WorldStreamer)
 		return Reason.MAJOR_ROAD
 	if streamer != null and streamer.is_occupied(c):
 		return Reason.GENERATED_BUILDING
+	## Phase 163: the base city's core stays readable. Size is the knob because that is what
+	## actually damages a skyline - a 9 m prop in the historic core is welcome, a tower is not.
+	if half > CreationZones.max_half(c):
+		return Reason.ZONE_SIZE
 	for p in near:
 		if c.distance_to(p) < half * 1.35:
 			return Reason.OVERLAP

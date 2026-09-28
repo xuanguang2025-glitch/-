@@ -40,8 +40,50 @@ const TEMPLATES := [
 ]
 
 
+## 装饰构件 (Phase 127 / 131). These are placed with their true metric size: a two-metre bench
+## is a two-metre bench, so the scale control deliberately does not apply to this catalogue —
+## a resized chair is not a thing a street needs, and pretending otherwise would make the
+## ghost and the built object disagree about what was placed.
+##
+## kind is "prop" for everything here; prop selects the generator in Props.
+const DECOR := [
+	{"id": "plane_tree", "name": "悬铃木", "kind": "prop", "prop": "plane_tree",
+		"size": Vector2(5, 5), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "bench", "name": "长椅", "kind": "prop", "prop": "bench",
+		"size": Vector2(1.8, 0.9), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "litter_bin", "name": "垃圾桶", "kind": "prop", "prop": "litter_bin",
+		"size": Vector2(0.8, 0.8), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "bollard", "name": "隔离桩", "kind": "prop", "prop": "bollard",
+		"size": Vector2(0.4, 0.4), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "street_lamp", "name": "路灯", "kind": "prop", "prop": "street_lamp",
+		"size": Vector2(1.8, 0.6), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "stop_sign", "name": "公交站牌", "kind": "prop", "prop": "stop_sign",
+		"size": Vector2(1.4, 0.6), "height": 0.0, "style": "suburb", "cat": "decor"},
+	{"id": "ad_board", "name": "广告灯箱", "kind": "prop", "prop": "ad_board",
+		"size": Vector2(2.6, 0.6), "height": 0.0, "style": "cbd_tower", "cat": "decor"},
+	{"id": "barrier", "name": "施工水马", "kind": "prop", "prop": "barrier",
+		"size": Vector2(2.0, 0.5), "height": 0.0, "style": "old_industrial", "cat": "decor"},
+	{"id": "curb_car", "name": "路边停车", "kind": "prop", "prop": "parked_car",
+		"size": Vector2(2.0, 4.6), "height": 0.0, "style": "suburb", "cat": "decor"},
+]
+
+
 static func count() -> int:
 	return TEMPLATES.size()
+
+
+## The palette a tool shows. Buildings and props are separate lists because cycling through
+## twelve towers to reach a bench is not an interface, and because the zone size cap only makes
+## sense when the catalogue itself is scoped. Takes a plain bool rather than the Tool enum to
+## avoid a CreationSystem <-> BuildTemplates type cycle.
+static func palette(decor: bool) -> Array:
+	return DECOR if decor else TEMPLATES
+
+
+static func get_at(list: Array, i: int) -> Dictionary:
+	if list.is_empty():
+		return TEMPLATES[0]
+	return list[clampi(i, 0, list.size() - 1)]
 
 
 static func get_tpl(i: int) -> Dictionary:
@@ -50,6 +92,9 @@ static func get_tpl(i: int) -> Dictionary:
 
 static func find(id: String) -> Dictionary:
 	for t in TEMPLATES:
+		if String(t["id"]) == id:
+			return t
+	for t in DECOR:
 		if String(t["id"]) == id:
 			return t
 	return TEMPLATES[0]
@@ -80,6 +125,11 @@ static func build(ctx: ChunkCtx, tpl: Dictionary, quad: PackedVector2Array, r: f
 	var tint := Assets.tint_for(style, r)
 	var h := float(tpl["height"])
 	match String(tpl["kind"]):
+		"prop":
+			# Props are emitted around the node origin; the object's own yaw and position come
+			# from the node transform, so a bench rotates by editing one transform like anything
+			# else in the editor.
+			_prop(ctx, String(tpl["prop"]), r)
 		"tower":
 			CellProgram.tower(ctx, quad, tint, h, r)
 		"plinth":
@@ -109,6 +159,30 @@ static func build(ctx: ChunkCtx, tpl: Dictionary, quad: PackedVector2Array, r: f
 
 
 # --- Player-built road ------------------------------------------------------
+static func _prop(ctx: ChunkCtx, name: String, r: float) -> void:
+	match name:
+		"plane_tree":
+			Props.plane_tree(ctx, Vector2.ZERO, r)
+		"bench":
+			Props.bench(ctx, Vector2.ZERO, 0.0, r)
+		"litter_bin":
+			Props.litter_bin(ctx, Vector2.ZERO, 0.0, r)
+		"bollard":
+			Props.bollard(ctx, Vector2.ZERO, 0.0, r)
+		"street_lamp":
+			Props.street_lamp(ctx, Vector2.ZERO, 0.0, r)
+		"stop_sign":
+			Props.stop_sign(ctx, Vector2.ZERO, 0.0, r)
+		"ad_board":
+			Props.ad_board(ctx, Vector2.ZERO, 0.0, r)
+		"barrier":
+			Props.barrier(ctx, Vector2.ZERO, 0.0, r)
+		"parked_car":
+			Props.parked_car(ctx, Vector2.ZERO, 0.0, r)
+		_:
+			Props.bollard(ctx, Vector2.ZERO, 0.0, r)
+
+
 ## A straight segment with carriageway, centre dashes, kerbed sidewalks and street lamps,
 ## assembled from the same MeshFusion primitives the avenue builder uses.
 static func build_road(ctx: ChunkCtx, a: Vector2, b: Vector2, w: float) -> void:

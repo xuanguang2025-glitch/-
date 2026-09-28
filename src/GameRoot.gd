@@ -76,13 +76,25 @@ func _read_cli() -> void:
 			_want_load = true
 			_boot_us = Time.get_ticks_usec()
 		elif a.begins_with("--demo-build="):
-			# Places a row of player-built objects in front of the camera and enters the
-			# editor, so one screenshot covers the generators, the toolbar and the ghost.
+			# Places a row of player-built objects and enters the editor, so one screenshot
+			# covers the generators, the toolbar and the ghost. The demo locates itself through
+			# the same validator the editor uses: once the official core started refusing towers,
+			# a hardcoded row coordinate would have quietly produced an empty screenshot.
 			var n := int(a.trim_prefix("--demo-build="))
-			for i in n:
+			var spots := ValidationTests.find_spots(n + 1, 30.0, streamer)
+			for i in mini(n, spots.size()):
 				creation.tpl_i = i % BuildTemplates.count()
 				creation.yaw = float(i) * 0.35
-				creation.place(Vector2(900.0 + float(i) * 95.0, 520.0))
+				creation.place(spots[i])
+			if not spots.is_empty():
+				var b0: Vector2 = spots[0]
+				creation._set_tool(CreationSystem.Tool.DECOR)
+				for i in BuildTemplates.DECOR.size():
+					creation.tpl_i = i
+					creation.place(b0 + Vector2(float(i) * 9.0 - 36.0, -40.0))
+				creation._set_tool(CreationSystem.Tool.BUILDING)
+				player.position = Vector3(b0.x, 2.0, b0.y + 58.0)
+			creation.tpl_i = 0
 			creation.set_active(true)
 			player.fly = true
 		elif a.begins_with("--view="):
@@ -236,114 +248,6 @@ func _ready() -> void:
 	print("=== boot ok: %s ===" % " | ".join(_report))
 	await _read_cli()
 
-
-## Exercises every refusal the validator can give, using real geography rather than mocks,
-## then the two-click road tool. Run with --validate-test (needs streamed chunks).
-func _validate_test() -> void:
-	print("=== validation self-test (chunks=%d) ===" % streamer.stats()["alive"])
-	creation.clear_all()
-	var half := 20.0
-
-	_check("off-map refused", Validation.check(Vector2(7000, 0), half, [], streamer),
-		Validation.Reason.OFF_MAP)
-	var ridx := int(CityData.huangpu_xz.size() * 0.45)
-	var rp: Vector2 = CityData.huangpu_xz[ridx]
-	_check("river refused", Validation.check(rp, half, [], streamer), Validation.Reason.WATER)
-	# Step out from the channel centre by its own half-width plus the middle of the bank
-	# band: the Huangpu is ~456 m across here, so a fixed offset stays inside the water.
-	var bank := rp + Vector2(CityData.huangpu_hw[ridx]
-		+ (Validation.MARGIN_WATER + Validation.MARGIN_BANK) * 0.5, 0)
-	_check("mud bank refused", Validation.check(bank, half, [], streamer),
-		Validation.Reason.BANK)
-	_check("park refused", Validation.check(Vector2(620, 620), half, [], streamer),
-		Validation.Reason.PARK)
-	_check("boulevard refused", Validation.check(Vector2(0, -360), half, [], streamer),
-		Validation.Reason.MAJOR_ROAD)
-
-	var occupied := Vector2.INF
-	for i in 600:
-		for j in 600:
-			var p := Vector2(-4000.0 + float(i) * 15.0, -4000.0 + float(j) * 15.0)
-			if streamer.is_occupied(p):
-				occupied = p
-				break
-		if occupied != Vector2.INF:
-			break
-	_check("found an occupied spot", occupied != Vector2.INF, true)
-	_check("generated building refused", Validation.check(occupied, half, [], streamer),
-		Validation.Reason.GENERATED_BUILDING)
-
-	var free := Vector2.INF
-	for i in 900:
-		for j in 900:
-			var p := Vector2(-4500.0 + float(i) * 11.0, -4500.0 + float(j) * 11.0)
-			if Validation.check(p, half, [], streamer) == Validation.Reason.OK:
-				free = p
-				break
-		if free != Vector2.INF:
-			break
-	_check("found a buildable spot", free != Vector2.INF, true)
-	_check("empty spot allowed", Validation.check(free, half, [], streamer),
-		Validation.Reason.OK)
-	creation.tpl_i = 0
-	var id := creation.place(free)
-	_check("place at allowed spot", id >= 0, true)
-	_check("same spot now overlaps", Validation.check(free, half, [free], streamer),
-		Validation.Reason.OVERLAP)
-	_check("re-place refused", creation.place(free), -1)
-	_check("refusal created nothing", creation.objects.size(), 1)
-
-	# Road tool: two clicks, then undo, then persistence of both endpoints. Start from an
-	# empty field so the corridor probe and road_click judge the same near-list.
-	creation.clear_all()
-	creation.tool = CreationSystem.Tool.ROAD
-	var ra := Vector2.INF
-	var rb := Vector2.INF
-	for i in 900:
-		if rb != Vector2.INF:
-			break
-		for j in 900:
-			var p := Vector2(-4500.0 + float(i) * 13.0, -4500.0 + float(j) * 13.0)
-			if Validation.check(p, 30.0, [], streamer) != Validation.Reason.OK:
-				continue
-			if ra == Vector2.INF:
-				ra = p
-			elif p.distance_to(ra) > 90.0 and p.distance_to(ra) < 160.0 \
-					and Validation.check((ra + p) * 0.5, p.distance_to(ra) * 0.5, [],
-						streamer) == Validation.Reason.OK:
-				rb = p
-				break
-	_check("found a road corridor", rb != Vector2.INF, true)
-	_check("first click only anchors", creation.road_click(ra), -1)
-	_check("anchor pending", creation._road_a != null, true)
-	var rid := creation.road_click(rb)
-	_check("second click commits road", rid >= 0, true)
-	_check("road stored with both ends",
-		is_equal_approx(float(creation.objects[rid]["x2"]), rb.x), true)
-	var rnode: Node3D = creation.nodes[rid]
-	var road_tris := 0
-	for mi in rnode.get_children():
-		if mi is MeshInstance3D:
-			road_tris += (mi as MeshInstance3D).mesh.surface_get_array_len(0)
-	_check("road emitted geometry", road_tris > 100, true)
-	_check("road counted", creation.objects.size(), 1)
-	creation.undo()
-	_check("road undone", creation.objects.size(), 0)
-	creation.redo()
-	_check("road redone", creation.objects.size(), 1)
-	_check("road save", creation.save_edits(), true)
-	creation.clear_all()
-	_check("road reload", creation.load_edits(), 1)
-	_check("road endpoints survived",
-		String(creation.objects[rid]["tpl"]), "road")
-
-	creation.clear_all()
-	if FileAccess.file_exists(CreationSystem.SAVE_PATH):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(CreationSystem.SAVE_PATH))
-	print("=== validation self-test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL",
-		_fails])
-
-
 const DEVICE_PATH := "user://device.json"
 
 
@@ -403,27 +307,9 @@ func _sim_soak(hours: int) -> void:
 	_fails += SimTests.soak(sim, hours)
 
 
-## n validator-approved spots, spaced so a test can place them without self-overlap. The
-## tests ask the world where they may build instead of hardcoding coordinates, which is what
-## let a hardcoded grid silently drift into the river once the geography was recalibrated.
-func _find_spots(n: int, half: float) -> Array:
-	var out: Array = []
-	for i in 320:
-		if out.size() >= n:
-			break
-		for j in 320:
-			var p := Vector2(-4500.0 + float(i) * 13.0, -4500.0 + float(j) * 13.0)
-			var far := true
-			for q in out:
-				if p.distance_to(q) < half * 3.5:
-					far = false
-					break
-			if not far:
-				continue
-			if Validation.check(p, half, out, streamer) == Validation.Reason.OK:
-				out.append(p)
-				break
-	return out
+## The placement validator's contract lives in ValidationTests; this is the CLI entry point.
+func _validate_test() -> void:
+	_fails += ValidationTests.run(creation, streamer, sim)
 
 
 ## Phase 37 test 3: build the maximum the editor can take and report what it cost. This is a
@@ -476,6 +362,14 @@ func _check(what: String, got: Variant, want: Variant) -> void:
 		str(got), str(want)])
 
 
+## Asserts a condition and prints the observed values beside it. _check() compares two values;
+## these assertions need "this must hold, and here is the evidence" — see review.sh rule R7.
+func _check_that(what: String, cond: bool, detail: String = "") -> void:
+	if not cond:
+		_fails += 1
+	print("[test] %s %-40s %s" % ["PASS" if cond else "FAIL", what, detail])
+
+
 func _create_test() -> void:
 	print("=== creation self-test ===")
 	creation.clear_all()
@@ -484,7 +378,7 @@ func _create_test() -> void:
 	_check("start empty", creation.objects.size(), 0)
 
 	creation.tpl_i = 0
-	var spots := _find_spots(5, 30.0)
+	var spots := ValidationTests.find_spots(5, 30.0, streamer)
 	_check("found 5 buildable spots", spots.size(), 5)
 	var ids: Array = []
 	for sp in spots:
@@ -550,6 +444,118 @@ func _create_test() -> void:
 		is_equal_approx(creation._seed_of(3), creation._seed_of(3)), true)
 
 	creation.clear_all()
+
+	# Phase 127 street furniture. Props come from their own palette and are placed at their
+	# true metric size, so these assertions check that the palette, the generated geometry,
+	# the scale exemption, the selection-follows-template rule and undo/redo all agree on that
+	# — rather than only that "something appeared in the dictionary".
+	creation._set_tool(CreationSystem.Tool.DECOR)
+	_check("装饰面板构件种类", BuildTemplates.palette(true).size(), 9)
+	_check("装饰工具取装饰表为当前模板", String(creation._tpl()["id"]), "plane_tree")
+	var dspots := ValidationTests.find_spots(4, 3.0, streamer)
+	_check("found 4 decor spots", dspots.size(), 4)
+	var dids: Array = []
+	for i in dspots.size():
+		creation.tpl_i = i
+		dids.append(creation.place(dspots[i]))
+	_check("decor placed", creation.objects.size(), dspots.size())
+	var prop_node: Node3D = creation.nodes[dids[1]]
+	var bags := 0
+	for mi in prop_node.get_children():
+		if mi is MeshInstance3D:
+			bags += 1
+	_check("构件生成了几何袋", bags > 0, true)
+	_check("构件带碰撞体", (prop_node.get_child(
+		prop_node.get_child_count() - 1) as StaticBody3D).get_child_count() > 0, true)
+	_check("构件存的是装饰 id", String(creation.objects[dids[1]]["tpl"]), "bench")
+	creation.select(dids[1])
+	_check("选中构件后工具跟随切换", creation.tool, CreationSystem.Tool.DECOR)
+	_check("构件不参与缩放", str(creation._tpl_of("bench", 3.0)["size"]),
+		str(Vector2(1.8, 0.9)))
+	creation.remove(dids[0])
+	creation.undo()
+	_check("decor undo 恢复", creation.objects.size(), dspots.size())
+	creation.redo()
+	_check("decor redo 再删", creation.objects.size(), dspots.size() - 1)
+	creation._set_tool(CreationSystem.Tool.BUILDING)
+	# The palette index carries over between palettes rather than resetting, so what must hold
+	# is that the current template belongs to the building table - not which entry it is.
+	var back := String(creation._tpl()["id"])
+	var in_build := false
+	for t in BuildTemplates.TEMPLATES:
+		if String(t["id"]) == back:
+			in_build = true
+	_check("切回建筑后模板来自建筑表", in_build, true)
+	_check("切换工具不越界到另一张表", String(creation._tpl()["kind"]) != "prop", true)
+	var dsave := creation.objects.size()
+	_check("decor save", creation.save_edits(), true)
+	creation.clear_all()
+	_check("decor reload", creation.load_edits(), dsave)
+	var kept := true
+	for k in creation.objects.keys():
+		var t: Dictionary = BuildTemplates.find(
+			String((creation.objects[k] as Dictionary)["tpl"]))
+		if String(t["kind"]) != "prop":
+			kept = false
+	_check("重载后仍是装饰构件", kept, true)
+	creation.clear_all()
+
+	# Phase 136 / 168: the point of the whole creation stack is that building something changes
+	# the city, so this asserts the ledger moves because a player placed a shop - and that undo
+	# and clear_all move it back. A shop count in a dictionary that the economy never hears
+	# about would pass every editor test above and still be a fake.
+	var mall_i := 0
+	var shop_i := 0
+	for i in BuildTemplates.TEMPLATES.size():
+		if String(BuildTemplates.TEMPLATES[i]["id"]) == "mall":
+			mall_i = i
+		if String(BuildTemplates.TEMPLATES[i]["id"]) == "shopfront":
+			shop_i = i
+	creation._set_tool(CreationSystem.Tool.BUILDING)
+	# A commercial placement only reaches the ledger where a ledger exists: CitySim bootstraps
+	# the named districts the census found, and the official core refuses anything mall-sized,
+	# so the test anchors on a district that is both simulated and open to building.
+	var anchor := Vector2(INF, INF)
+	for d in CityData.DISTRICTS:
+		var dn := String(d["name"])
+		if not sim.districts.has(dn):
+			continue
+		var dc := Vector2(float(d["cx"]), float(d["cz"]))
+		if CreationZones.max_half(dc) < 40.0:
+			continue
+		anchor = dc
+		break
+	_check("找到可建造的被模拟街区", anchor != Vector2(INF, INF), true)
+	var bspots := ValidationTests.find_spots(2, 40.0, streamer, anchor, 140)
+	_check("found 2 commercial spots", bspots.size(), 2)
+	var jobs0 := sim.total_employment()
+	var shops0 := sim.total_shops()
+	var money0 := sim.money_total()
+	creation.tpl_i = mall_i
+	var mid := creation.place(bspots[0])
+	_check("商场放置成功", mid >= 0, true)
+	_check_that("放置商场后城市就业增加",
+		sim.total_employment() > jobs0, "%d -> %d" % [jobs0, sim.total_employment()])
+	_check_that("放置商场后商铺计数进入账本",
+		sim.total_shops() > shops0, "%d -> %d" % [shops0, sim.total_shops()])
+	var jobs1 := sim.total_employment()
+	creation.undo()
+	_check_that("撤销商场后就业回落", sim.total_employment() < jobs1,
+		"%d -> %d" % [jobs1, sim.total_employment()])
+	_check_that("撤销后回到放置前的就业", sim.total_employment() == jobs0,
+		"%d vs %d" % [sim.total_employment(), jobs0])
+	creation.tpl_i = shop_i
+	creation.place(bspots[1])
+	_check_that("沿街商业同样计入就业", sim.total_employment() > jobs0,
+		"%d -> %d" % [jobs0, sim.total_employment()])
+	creation.clear_all()
+	_check_that("清空作品后账本回到初值", sim.total_employment() == jobs0,
+		"%d vs %d" % [sim.total_employment(), jobs0])
+	_check_that("建造与拆除不凭空产生货币", sim.money_total() == money0,
+		"%d vs %d" % [sim.money_total(), money0])
+
+	creation.clear_all()
+
 	if FileAccess.file_exists(CreationSystem.SAVE_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(CreationSystem.SAVE_PATH))
 	print("=== creation self-test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL",

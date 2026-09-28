@@ -21,6 +21,10 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-014 | `Pipeline/lib.sh` 的 `require()` 只打印 GATE-FAIL、不改退出码，解析不到数值时流水线仍报 `PIPELINE: PASS` | green | 负测：`require "x" ""` 后 `RUNFAIL=1`；`Pipeline/gates.sh` 注释记录了这条 |
 | BUG-015 | TrafficSystem 用 `1-0.35×wet` 在雨天**减少**车辆，而 CitySim 的出行需求在雨天**增加**——同一场雨存在两套相互矛盾的世界模型 | green | `--sim-test`：`雨天车辆系数高于晴天`；车辆数只由模拟需求给出，湿度只影响车速 |
 | BUG-016 | `bootstrap()` 在 `--time=` 生效前播种 footfall / ride_demand，用钟点 17.4 而非请求时刻，首个整点前街景密度偏 | **red** | 一次整点推进即自动纠正；复现：`--time=3.0` 后看首行 `[sim]` 的 `crowd_f` |
+| BUG-017 | `place()` 直接写 `objects` 并 `_realize`，绕过 `_put`，玩家放的商铺**永远不向经济登记**——编辑器一切正常，账本毫无变化 | green | `--create-test`：`放置商场后城市就业增加`（69407→69411）与 `撤销后回到放置前的就业` |
+| BUG-018 | 分区规则生效后，`--demo-build` 的硬编码坐标落在黄浦核心区，塔楼被合法拒绝，演示截图只剩构件而看起来像"建筑生成坏了" | green | `ValidationTests.find_spots` 自检定位；截图复核命令：`--demo-build=2 --view=-0.06,0,2` |
+| BUG-019 | `_check(what, got, want)` 被当作 `_check_that(cond, detail)` 使用，把 `"true"` 与 `"69407 -> 69411"` 相比，**通过的断言报 FAIL**（两个会话内复发两次） | green | `Pipeline/review.sh` R7（已用植入违规样本做正反例回归：有违规→FAIL，删除→PASS） |
+| BUG-020 | 商铺登记若采用"每次存放后全表重算"，1000 件压力测试退化为 O(n²) | green | 改为按对象登记/撤销（`_register`/`_unregister`）；`--bench-stress=1000` 的 `per_object` 与拆分前同量级 |
 
 ## red 项的处理约定
 
