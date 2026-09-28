@@ -63,6 +63,26 @@ jobs:
           cat create.log | grep -E "PASS|FAIL|self-test"
           grep -q "creation self-test: PASS" create.log
 
+      # The city economy is CPU-only state, so its contract runs here rather than waiting for
+      # a GPU runner. Frame caps are generous and `timeout` guards the case where streaming
+      # never reaches the 250-chunk threshold the test waits on: silence fails, it does not hang.
+      - name: 城市模拟自测（区级经济 + 消费端接入）
+        run: |
+          timeout 900 "$GODOT" --headless --path . --quit-after 20000 -- --sim-test >sim.log 2>&1 || true
+          grep -E "^\[test\] FAIL|self-test" sim.log
+          grep -q "city simulation self-test: PASS" sim.log
+
+      - name: 城市模拟年度浸泡（守恒 + 反塌缩）
+        run: |
+          timeout 900 "$GODOT" --headless --path . --quit-after 20000 -- --sim-soak=8760 >soak.log 2>&1 || true
+          grep -E "^\[soak\]|^\[test\] FAIL" soak.log
+          grep -q "sim soak: PASS" soak.log
+
+      - name: 客户端-后端存档往返
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl
+          bash Pipeline/backend_sync.sh
+
       - name: 世界普查
         run: |
           "$GODOT" --headless --path . --quit-after 60 -- --census 2>&1 | grep -E "^\[census\]|^\[pop\]"

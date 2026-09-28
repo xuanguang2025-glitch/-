@@ -307,6 +307,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const get = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
   const port = Number(get('--port', 8788));
   const logFile = get('--log', null);
+  // Self-exit timer: the gate scripts run under shells where killing a backgrounded child
+  // is unreliable (Git Bash on Windows leaves it running), which silently contaminated later
+  // performance measurements with stray processes.
+  const exitAfter = Number(get('--exit-after', 0));
+  if (exitAfter > 0) setTimeout(() => process.exit(0), exitAfter).unref();
   const { server } = makeApp({ port, data: get('--data', 'backend/data'),
     log: (e) => { if (logFile) appendFileSync(logFile, JSON.stringify(e) + '\n'); } });
   server.listen(port, '127.0.0.1', () => console.log(`[backend] listening on 127.0.0.1:${port}`));

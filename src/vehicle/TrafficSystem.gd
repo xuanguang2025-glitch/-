@@ -16,6 +16,7 @@ var sim_radius := 900.0
 var focus := Vector3.ZERO
 var night := 0.0
 var wet := 0.0
+var sim: CitySim
 
 var _sedan: MultiMeshInstance3D
 var _cabin: MultiMeshInstance3D
@@ -27,6 +28,7 @@ var _rush: float = 0.25
 
 func _ready() -> void:
 	add_to_group("traffic")
+	sim = get_tree().get_first_node_in_group("sim")
 	_rng.seed = 0x7A7E
 	_sedan = _make(_sedan_mesh(), Assets.props_mat(), true)
 	_cabin = _make(_cabin_mesh(), Assets.std(Color(0.05, 0.06, 0.08), 0.08, 0.2), false)
@@ -107,12 +109,20 @@ func set_time_factor(hour: float) -> void:
 	_rush = f
 
 
+## Vehicles the district under the viewer wants, from the city's ride demand. Dry weather
+## resolves to exactly 1.0, so this is invisible until demand actually moves.
+func _sim_cars() -> float:
+	return sim.car_factor_at(Vector2(focus.x, focus.z)) if sim != null else 1.0
+
+
 func _process(delta: float) -> void:
 	if GameGlobals.game_mode == GameGlobals.GameMode.BUILD:
 		return
 	if focus == Vector3.ZERO:
 		return
-	var want := int(budget * _rush * (1.0 - 0.35 * wet))
+	# Rain used to remove cars here; the simulation says rain buys rides, so the old term was
+	# a second, contradictory model of the same weather. Wetness still costs speed below.
+	var want := mini(budget, int(budget * _rush * _sim_cars()))
 	while cars.size() < want:
 		var ag := {}
 		_recruit(ag)

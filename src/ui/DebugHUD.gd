@@ -68,6 +68,11 @@ func feed(delta: float, s: Dictionary) -> void:
 	lines.append("行人 %d   车辆 %d   隐蔽 %d   高峰 %.0f%%" % [
 		npc.get("agents", 0), cars.get("cars", 0), npc.get("hidden", 0),
 		float(cars.get("rush", 0.0)) * 100.0])
+	var sm: Dictionary = s.get("sim", {})
+	if not sm.is_empty():
+		lines.append("城市模拟 第%d天 %d时   商铺 %d   就业 %d   货币 %.0f亿" % [
+			sm.get("day", 1), sm.get("hours", 0), sm.get("shops", 0),
+			sm.get("employed", 0), float(sm.get("money", 0)) / 10000000000.0])
 	var who: Dictionary = npc.get("who", {})
 	if not who.is_empty():
 		var prof: NPCProfile = who["prof"]

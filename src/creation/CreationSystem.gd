@@ -42,6 +42,7 @@ var _mark: MeshInstance3D
 var _mark_mat: StandardMaterial3D
 var camera: Camera3D
 var streamer: WorldStreamer
+var backend: BackendClient
 
 ## Result of the last validation pass, surfaced in the HUD so a refused placement is
 ## attributable rather than mysterious.
@@ -481,6 +482,122 @@ func _put(st: Dictionary) -> void:
 		select(id)
 
 
+func _payload() -> Dictionary:
+	var arr: Array = []
+	for k in objects.keys():
+		arr.append(objects[k])
+	arr.sort_custom(func(a, b): return int(a["id"]) < int(b["id"]))
+	return {"objects": arr, "next_id": next_id}
+
+
+## Godot's JSON parser hands back every number as a float, so a record that went out with
+## id=1 comes back as id=1.0 and a reloaded save is no longer identical to the one written.
+## Normalising on the way in makes local and server reloads agree, and keeps ids usable as
+## dictionary keys across sessions.
+static func _normalize(raw: Dictionary) -> Dictionary:
+	var st := raw.duplicate()
+	st["id"] = int(st.get("id", 0))
+	st["tpl"] = String(st.get("tpl", ""))
+	st["x"] = float(st.get("x", 0.0))
+	st["z"] = float(st.get("z", 0.0))
+	st["yaw"] = float(st.get("yaw", 0.0))
+	st["scale"] = float(st.get("scale", 1.0))
+	for k in ["x2", "z2", "width"]:
+		if st.has(k):
+			st[k] = float(st[k])
+	return st
+
+
+func _apply_payload(p: Dictionary) -> int:
+	clear_all()
+	next_id = maxi(next_id, int(p.get("next_id", 1)))
+	var n := 0
+	for raw in p.get("objects", []):
+		var st := _normalize(raw)
+		var id := int(st["id"])
+		objects[id] = st
+		_realize(st)
+		next_id = maxi(next_id, id + 1)
+		n += 1
+	return n
+
+
+## Mirrors the just-written local cache to the server. Deliberately not awaited by callers:
+## a save must never block the editor on network latency.
+func mirror_save() -> void:
+	if backend == null or not backend.online:
+		return
+	var ok: bool = await backend.save(_payload())
+	if ok:
+		GameGlobals.say("已同步到服务器")
+	else:
+		GameGlobals.say("服务器同步失败（本地存档已保留）：%s" % backend.last_error)
+
+
+## Pulls the server copy over the local one. Reports corruption recovery, because the server
+## rolls back a damaged generation on its own and the player should know it happened.
+func pull_save() -> int:
+	if backend == null or not backend.online:
+		return -1
+	var r: Dictionary = await backend.load_save()
+	if not bool(r["ok"]):
+		GameGlobals.say("读取服务器存档失败：%s" % String(r.get("error", "")))
+		return -1
+	if bool(r["absent"]):
+		return 0
+	var n := _apply_payload(r["payload"])
+	if bool(r["recovered"]):
+		GameGlobals.say("服务器检测到存档损坏，已自动回退到上一代（%d 件作品）" % n)
+	return n
+
+
+## End-to-end proof that the client and the backend agree on a save round-trip: place,
+## mirror, wipe memory, pull back, compare. Run with --backend-sync-test.
+func sync_roundtrip_test() -> bool:
+	var fails := 0
+	clear_all()
+	_reason = Validation.Reason.OK
+	var placed := 0
+	var ring := 0
+	while placed < 3 and ring < 400:
+		for j in 400:
+			var p := Vector2(-4500.0 + float(ring) * 13.0, -4500.0 + float(j) * 13.0)
+			if _validate(p) != Validation.Reason.OK:
+				continue
+			if place(p) >= 0:
+				placed += 1
+			if placed >= 3:
+				break
+		ring += 1
+	if placed < 3:
+		print("[sync] FAIL  only placed %d objects, cannot test round-trip" % placed)
+		return false
+	var before := JSON.stringify(_payload())
+	var pushed: bool = await backend.save(_payload())
+	if not pushed:
+		print("[sync] FAIL  mirror_save  %s" % backend.last_error)
+		fails += 1
+	clear_all()
+	var pulled := await pull_save()
+	if pulled != 3:
+		print("[sync] FAIL  pull returned %d (want 3)" % pulled)
+		fails += 1
+	var after := JSON.stringify(_payload())
+	if before != after:
+		print("[sync] FAIL  payload differs after round-trip")
+		print("        before=%s" % before)
+		print("        after =%s" % after)
+		fails += 1
+	var bal := await backend.balance()
+	if bal < 0:
+		print("[sync] FAIL  balance not readable")
+		fails += 1
+	else:
+		print("[sync] server balance = %d (服务器计算，客户端无权设定)" % bal)
+	clear_all()
+	return fails == 0
+
+
 # --- Persistence ------------------------------------------------------------
 func save_edits() -> bool:
 	var arr: Array = []
@@ -494,6 +611,7 @@ func save_edits() -> bool:
 	f.store_string(JSON.stringify({"version": 1, "next_id": next_id, "objects": arr}))
 	f.close()
 	GameGlobals.say("已保存 %d 件作品" % arr.size())
+	mirror_save()
 	return true
 
 
@@ -507,14 +625,9 @@ func load_edits() -> int:
 	f.close()
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return 0
-	next_id = maxi(next_id, int(parsed.get("next_id", 1)))
-	var n := 0
-	for st in parsed.get("objects", []):
-		var id := int(st["id"])
-		objects[id] = st
-		_realize(st)
-		next_id = maxi(next_id, id + 1)
-		n += 1
+	# Same normalisation as the server path, so a local reload and a cloud reload cannot
+	# produce two different object sets from one save.
+	var n := _apply_payload(parsed)
 	if n > 0:
 		print("[creation] loaded %d saved objects" % n)
 	return n

@@ -20,22 +20,38 @@ bar() { # done total width
 CA=$(count_pat '^\[test\] (PASS|FAIL)' "$LOG/create.log"); CF=$(count_pat '^\[test\] FAIL' "$LOG/create.log")
 VA=$(count_pat '^\[test\] (PASS|FAIL)' "$LOG/validate.log"); VF=$(count_pat '^\[test\] FAIL' "$LOG/validate.log")
 TA=$(( CA + VA )); TF=$(( CF + VF ))
-
 PE=$(count_pat 'parse error|script error|failed to load' "$LOG/parse.log")
 BE=$(count_pat '^ERROR|SCRIPT ERROR' "$LOG/boot.log")
-CHUNK_MS=$(sum_ms "$LOG/perf.log")
+# The dashboard must apply the SAME measurement rule as the gate. It previously read a single
+# copied log and so reported a 43 s outlier as the stream time while run.sh used the median.
+CHUNK_MS=$(median $(for f in "$LOG"/perf[0-9].log; do [ -f "$f" ] && sum_ms "$f"; done) 2>/dev/null)
+[ -n "$CHUNK_MS" ] || CHUNK_MS=$(sum_ms "$LOG/perf.log")
+LM_SAMPLES=""
+for f in "$LOG"/load[0-9].log; do
+  [ -f "$f" ] || continue
+  v=$(num 'in [0-9]+ ms' "$f"); [ -n "$v" ] && LM_SAMPLES="$LM_SAMPLES $v"
+done
+if [ -n "$LM_SAMPLES" ]; then LOAD_MS=$(median $LM_SAMPLES); else LOAD_MS=$(num 'in [0-9]+ ms' "$LOG/load.log"); fi
 PAIR=$(grep -oE 'chunks=[0-9]+/[0-9]+' "$LOG/perf.log" 2>/dev/null | tail -1)
 ALIVE=$(printf '%s' "$PAIR" | cut -d= -f2 | cut -d/ -f1)
 WANT=$(printf '%s' "$PAIR" | cut -d/ -f2)
 TRIS=$(num 'tris=[0-9]+' "$LOG/perf.log")
 FPS=$(num 'fps=[0-9.]+' "$LOG/perf.log")
 FREED=$(num 'freed=[0-9]+' "$LOG/perf.log")
-LOAD_MS=$(num 'in [0-9]+ ms' "$LOG/load.log")
 PLACED=$(num 'placed=[0-9]+' "$LOG/stress.log")
 MEM=$(num 'static_mem=[0-9.]+' "$LOG/stress.log")
 PER_OBJ=$(num 'per_object=[0-9.]+' "$LOG/stress.log")
 REV=$(grep -oE 'review: (PASS|FAIL)' "$LOG/review.log" 2>/dev/null | tail -1)
 CEN=$(grep -oE 'cells=[0-9]+ +plates=[0-9]+ +edges=[0-9]+' "$LOG/census.log" 2>/dev/null | tail -1)
+# Simulation (Part 8). Read from the same logs run.sh gated on, through the same fail-closed
+# helpers, so the dashboard cannot show a number the gate did not also have to read.
+SA=$(count_pat '^\[test\] (PASS|FAIL)' "$LOG/sim.log"); SF=$(count_pat '^\[test\] FAIL' "$LOG/sim.log")
+SPH=$(num 'per_hour=[0-9.]+' "$LOG/soak.log")
+SHOPS=$(num 'shops=[0-9]+' "$LOG/soak.log")
+JOBS=$(num 'employed=[0-9]+' "$LOG/soak.log")
+HRATE=$(num 'hire_rate=[0-9.]+' "$LOG/soak.log")
+LIVE=$(count_pat '^\[sim\] day' "$LOG/live.log")
+SDIST=$(num 'over [0-9]+ districts' "$LOG/soak.log")
 [ -n "$ALIVE" ] || ALIVE=0
 [ -n "$WANT" ] || WANT=1
 [ -n "$REV" ] || REV="review: 未运行"
@@ -64,13 +80,20 @@ ok "无 chunk 卸载抖动（freed=${FREED:-未解析}）"              "[ \"$FR
 BT=$(num 'backend: [0-9]+' "$LOG/backend.log"); BT_T=$(grep -oE 'backend: [0-9]+/[0-9]+' "$LOG/backend.log" 2>/dev/null | cut -d/ -f2)
 ok "后端契约测试全通过（${BT:-未运行}/${BT_T:-未运行}）" \
    "[ -n \"$BT\" ] && [ \"$BT\" = \"$BT_T\" ] && [ \"$BT\" != \"0\" ]"
+ok "客户端-后端存档往返一致" \
+   "grep -q 'backend sync test: PASS' \"$LOG/backend_sync.log\" 2>/dev/null"
 ok "静态审查 $REV"                                           "printf '%s' \"$REV\" | grep -q PASS"
+ok "城市模拟自测全通过（$((SA-SF))/$SA）"                     "[ \"$SF\" = \"0\" ] && [ \"$SA\" -ge \"$MIN_SIM_ASSERTS\" ]"
+ok "一年 soak 每小时 ≤ ${MAX_SIM_HOUR_MS} ms（当前 ${SPH:-未解析}）" \
+   "[ -n \"$SPH\" ] && awk -v v=\"$SPH\" -v m=$MAX_SIM_HOUR_MS 'BEGIN{exit !(v<=m)}'"
+ok "实时运行中经济推进（${LIVE:-0} 小时）"                     "[ \"$LIVE\" -ge \"$SIM_LIVE_MIN_HOURS\" ]"
 echo
 echo "## 模块"
 echo
 printf -- '- %-12s %s chunk 流式到位\n' "城市生成" "$(bar "$ALIVE" "$WANT")"
 printf -- '- %-12s %s 已接入（建筑、道路；地形/装饰/车辆/NPC/任务未做）\n' "创造工具" "$(bar 2 7)"
 printf -- '- %-12s %s 通过\n' "自测断言" "$(bar $((TA-TF)) "$TA")"
+printf -- '- %-12s %s 断言（含 %s 个区域的实时联动）\n' "城市模拟" "$(bar $((SA-SF)) "$SA")" "${SDIST:-0}"
 printf -- '- %-12s %s 达标\n' "性能门禁" "$(bar "$GATES" "$GTOT")"
 echo
 echo "## 实测"
@@ -82,6 +105,8 @@ echo "chunk 构建      ${CHUNK_MS:-?} ms   （门槛 ${MAX_CHUNK_BUILD_MS} ms�
 echo "全城流式        ${LOAD_MS:-?} ms"
 echo "压力放置        ${PLACED:-?}/${STRESS_OBJECTS}  单件 ${PER_OBJ:-?} ms  静态内存 ${MEM:-?} MB"
 echo "世界普查        ${CEN:-?}"
+echo "城市模拟        ${SDIST:-?} 个区域  商铺 ${SHOPS:-?}  就业 ${JOBS:-?}（招聘率 ${HRATE:-?}）"
+echo "模拟单小时成本  ${SPH:-?} ms（门槛 ${MAX_SIM_HOUR_MS} ms）   实时推进 ${LIVE:-?} 小时"
 echo '```'
 echo
 echo "> 内存列为 1000 件玩家作品在场时的静态内存，说明 BUG-008（作品不参与流式卸载）真实存在。"

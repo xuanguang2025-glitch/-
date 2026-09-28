@@ -22,6 +22,11 @@ var _report: Array[String] = []
 var _want_validate := false
 var _want_stress := 0
 var _want_load := false
+var _want_sync := false
+var _want_sim := false
+var _want_soak := 0
+var sim: CitySim
+var _sim_hour := -1
 var _boot_us := 0
 var _load_reported := false
 var _shot_dir: String = ""
@@ -53,6 +58,14 @@ func _read_cli() -> void:
 			_census()
 		elif a == "--create-test":
 			_create_test()
+		elif a.begins_with("--backend="):
+			await _setup_backend(a.trim_prefix("--backend="))
+		elif a == "--backend-sync-test":
+			_want_sync = true
+		elif a == "--sim-test":
+			_want_sim = true
+		elif a.begins_with("--sim-soak="):
+			_want_soak = int(a.trim_prefix("--sim-soak="))
 		elif a == "--validate-test":
 			# Needs streamed chunks to answer "is a generated building already here", so it
 			# waits for the world instead of running at boot.
@@ -160,6 +173,18 @@ func _ready() -> void:
 	population.name = "PopulationSystem"
 	add_child(population)
 
+	# The simulation inherits the city the generator actually made: its clock, wetness and
+	# hourly activity curve all come from the existing systems rather than its own copy.
+	sim = CitySim.new()
+	sim.name = "CitySim"
+	add_child(sim)
+	sim.configure(
+		func() -> float: return GameGlobals.time_of_day,
+		rig.wet_factor,
+		func(h: float) -> float: return population.active_share(h))
+	sim.bootstrap(population)
+	print("[sim] %s" % str(sim.stats()))
+
 	crowd = CrowdSystem.new()
 	crowd.name = "CrowdSystem"
 	add_child(crowd)
@@ -209,7 +234,7 @@ func _ready() -> void:
 	_report.append("roads=%d landmarks=%d" % [CityData.roads.size(), CityData.LANDMARKS.size()])
 	_report.append("spawn=%s" % str(spawn))
 	print("=== boot ok: %s ===" % " | ".join(_report))
-	_read_cli()
+	await _read_cli()
 
 
 ## Exercises every refusal the validator can give, using real geography rather than mocks,
@@ -317,6 +342,65 @@ func _validate_test() -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(CreationSystem.SAVE_PATH))
 	print("=== validation self-test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL",
 		_fails])
+
+
+const DEVICE_PATH := "user://device.json"
+
+
+## Establishes the client half of the backend link. The credential is a generated device
+## secret kept in user://, so the same install keeps the same identity without the player
+## ever typing a password; real auth is a documented swap point.
+func _setup_backend(url: String) -> void:
+	creation.backend = BackendClient.new()
+	creation.backend.name = "BackendClient"
+	add_child(creation.backend)
+	creation.backend.configure(url)
+	var dev: Dictionary = {}
+	if FileAccess.file_exists(DEVICE_PATH):
+		var rf := FileAccess.open(DEVICE_PATH, FileAccess.READ)
+		var parsed: Variant = JSON.parse_string(rf.get_as_text())
+		rf.close()
+		if typeof(parsed) == TYPE_DICTIONARY:
+			dev = parsed
+	if dev.is_empty():
+		dev = {"name": "玩家%04d" % randi_range(0, 9999),
+			"secret": "%s%s" % [str(randi()), str(randi())]}
+		var wf := FileAccess.open(DEVICE_PATH, FileAccess.WRITE)
+		wf.store_string(JSON.stringify(dev))
+		wf.close()
+	var ok: bool = await creation.backend.ensure_account(
+		String(dev["name"]), String(dev["secret"]))
+	print("[backend] %s account=%s online=%s %s" % [url, dev["name"], ok,
+		"" if ok else creation.backend.last_error])
+	if ok:
+		var n := await creation.pull_save()
+		if n > 0:
+			print("[backend] restored %d objects from server" % n)
+
+
+## End-to-end client<->backend proof. Deferred until chunks are streamed because it places
+## real objects through the validator.
+func _sync_test() -> void:
+	print("=== backend sync test ===")
+	if creation.backend == null or not creation.backend.online:
+		print("[sync] FAIL  未配置 --backend=<url>")
+		_fails += 1
+	else:
+		if await creation.sync_roundtrip_test():
+			print("[sync] PASS")
+		else:
+			_fails += 1
+	print("=== backend sync test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL", _fails])
+
+
+## The simulation's own acceptance contract lives in SimTests; these are the CLI entry points,
+## and the failures they return join the boot verdict.
+func _sim_test() -> void:
+	_fails += SimTests.run(sim, population, crowd, traffic)
+
+
+func _sim_soak(hours: int) -> void:
+	_fails += SimTests.soak(sim, hours)
 
 
 ## n validator-approved spots, spaced so a test can place them without self-overlap. The
@@ -526,6 +610,19 @@ func _process(delta: float) -> void:
 		_want_validate = false
 		_validate_test()
 		get_tree().quit()
+	if _want_sync and streamer.stats()["alive"] > 250:
+		_want_sync = false
+		await _sync_test()
+		get_tree().quit()
+	if _want_sim and streamer.stats()["alive"] > 250:
+		_want_sim = false
+		_sim_test()
+		get_tree().quit()
+	if _want_soak > 0 and streamer.stats()["alive"] > 250:
+		var h := _want_soak
+		_want_soak = 0
+		_sim_soak(h)
+		get_tree().quit()
 	if _want_stress > 0 and streamer.stats()["alive"] > 250:
 		var n := _want_stress
 		_want_stress = 0
@@ -564,6 +661,25 @@ func _process(delta: float) -> void:
 	var hour := GameGlobals.time_of_day
 	crowd.set_clock(hour, rig.wet_factor())
 	traffic.set_time_factor(hour)
+	# Phase 109: the economy runs on the clock's hour, never per frame. At 480 s a day that is
+	# one tick every 20 s. Catch-up is capped because a stalled frame must not turn into a
+	# hundred-tick spike; the simulation then trails the clock, which is bounded and honest.
+	var hh := int(hour)
+	if _sim_hour < 0:
+		_sim_hour = hh			# first frame: anchor to the clock, do not fast-forward
+	elif hh != _sim_hour:
+		var steps := posmod(hh - _sim_hour, 24)
+		_sim_hour = hh
+		for i in mini(steps, 3):
+			sim.advance_hour()
+		# One line per clock hour is the evidence that the live path ticks and that the
+		# consumers react: agents/cars are what those factors produced this frame.
+		print(("[sim] day %d hour %02d wet=%.2f shops=%d jobs=%d crowd_f=%.2f car_f=%.2f " +
+			"agents=%d vehicles=%d") % [
+			sim.day, hh, rig.wet_factor(), sim.total_shops(), sim.total_employment(),
+			sim.crowd_factor_at(Vector2(cam.x, cam.z)),
+			sim.car_factor_at(Vector2(cam.x, cam.z)),
+			int(crowd.stats()["agents"]), int(traffic.stats()["cars"])])
 	weather.follow(cam)
 	hud.feed(delta, _snap())
 
@@ -578,6 +694,7 @@ func _snap() -> Dictionary:
 		"drive": GameGlobals.game_mode == GameGlobals.GameMode.DRIVE,
 		"npc": crowd.stats(),
 		"cars": traffic.stats(),
+		"sim": sim.stats(),
 		"creation": creation.stats(),
 	}
 

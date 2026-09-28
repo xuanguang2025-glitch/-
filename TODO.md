@@ -4,10 +4,18 @@
 
 ## 现在就能做（不依赖多人后端）
 
-- [ ] **客户端接后端存档**：`CreationSystem.save_edits()` 走 `PUT /v1/save`，
-      本地 `user://` 降级为离线缓存。验收：新增 `--backend-sync-test` 断言往返一致。
+- [x] **客户端接后端存档**：`CreationSystem.mirror_save/pull_save` 走 `PUT/GET /v1/save`，
+      本地 `user://` 为离线缓存。验收已就位：`Pipeline/run.sh` 第 8 步（客户端-后端往返一致）。
+- [ ] **城市模拟落盘**：`CitySim.snapshot()` 写入后端三代存档，`restore()` 在读档时校验版本。
+      验收：`--backend-sync-test` 增断言"存→跑 500 小时→读→状态哈希与存前一致"。
+- [ ] **模拟影响个体**：给 tier0 的 `NPCProfile` 绑一个区级收入来源，工资变化改变其目的地
+      （家→商圈半径）。验收：`--sim-test` 增断言"降薪后 tier0 购物出行次数下降"。
+- [ ] **显式道路图与路口通行权**：把 Lattice 边升格为带容量的路段，红绿灯改变容量。
+      验收：`--sim-test` 增断言"关闭一条主干道的两个方向后，该区 `car_factor` 上升且车速下降"。
+- [ ] **空间城市事件**：施工/集会占用某块区域，进入 `Validation.check` 与出行需求。
+      验收：事件存在时该区 `crowd_factor` 与放置合法性同时改变，两条断言。
 - [ ] **BUG-002 性能**：`CityData` 量化缓存改为线程安全（每线程独立分片），
-      然后 `WorkerThreadPool` 并行构建 chunk。验收：`[prof] chunks` 均值 ≤ 7 ms 且门禁 8/8。
+      然后 `WorkerThreadPool` 并行构建 chunk。验收：`[prof] chunks` 均值 ≤ 7 ms 且门禁 9/9。
 - [ ] **BUG-008 作品卸载**：`CreationSystem` 按 chunk 分桶持有作品节点，
       随 `WorldStreamer` 进出视野加载/释放。验收：`--bench-stress=1000` 的 `static_mem` 显著下降。
 - [ ] **BUG-004 桥底标线穿透**：先建"桥下仰拍固定机位"基线截图，再补桥面底板。

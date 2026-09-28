@@ -21,6 +21,7 @@ const ARRIVE_R := 115.0
 
 var agents: Array = []
 var budget := 260
+var sim: CitySim
 var sim_radius := 700.0
 var focus := Vector3.ZERO
 var pop: PopulationSystem
@@ -42,6 +43,7 @@ func _ready() -> void:
 	add_child(_pose_a)
 	add_child(_pose_b)
 	pop = get_tree().get_first_node_in_group("population")
+	sim = get_tree().get_first_node_in_group("sim")
 
 
 func _make_pose(pose: int) -> MultiMeshInstance3D:
@@ -99,7 +101,12 @@ func _process(delta: float) -> void:
 		return
 	_near_t -= delta
 	var share := pop.active_share(hour)
-	var want := int(budget * share)
+	# District footfall comes from the city simulation. Without it the crowd is a formula
+	# of the clock; with it an empty high street is a consequence of shops closing.
+	var sim_f := 1.0
+	if sim != null:
+		sim_f = sim.crowd_factor_at(Vector2(focus.x, focus.z))
+	var want := int(budget * share * sim_f)
 	while agents.size() < want:
 		var ag := {}
 		_seed(ag)

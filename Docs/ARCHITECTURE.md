@@ -24,11 +24,19 @@
       ├── WeatherSystem (GPUParticles3D)
       ├── FarSilhouette (HLOD 替身)
       ├── CreationSystem ─► Validation ─► BuildTemplates ─► CellProgram
+      ├── CitySim  ◄── 整点推进（随钟点，从不每帧）        src/sim/CitySim.gd
+      │      │  区级状态：人口/劳动力/商铺/三桶现金/压力/客流/出行需求
+      │      ├──► CrowdSystem.crowd_factor_at  → 街道行人预算
+      │      └──► TrafficSystem.car_factor_at  → 街道车辆预算
+      ├── SimTests (验收契约，不属于场景脚本)              src/sim/SimTests.gd
       └── DebugHUD
 
   GameGlobals (autoload)：事件总线 / 输入映射 / 世界常量 / 哈希噪声
   QualityPresets (autoload)：4 档画质，通过 call_group 广播 apply_quality
   CityData (autoload)：上海空间模型，所有生成的唯一真相来源
+
+  消费者按 group("sim") 自行解析 CitySim，而不是由 GameRoot 赋值：
+  未接入的系统会恒返回 1.0，看起来与接入后完全一样 —— 所以接线本身必须是可断言的。
 ```
 
 ### 关键不变量
@@ -40,7 +48,12 @@
 | 玩家作品与程序化城市共用生成器 | `BuildTemplates.build` → `CellProgram.*` | 截图 + `--create-test` |
 | 任何新内容必须过 `Validation.check` | 唯一入口 | `--validate-test` 七类理由 |
 | chunk 顶点是世界绝对坐标，节点保持原点 | `WorldStreamer._build` | BUG-003（曾整城位移） |
-| 数值门槛解析失败即判失败 | `Pipeline/lib.sh` | 反例验证（删日志→7/8） |
+| 数值门槛解析失败即判失败 | `Pipeline/lib.sh` | 反例验证（删日志→7/8；`require` 经 `die` 置 RUNFAIL） |
+| 经济只有配对转移，不凭空产生货币 | `CitySim._market` 每一行都是两桶配对 | `--sim-test` 守恒断言 + `--sim-soak=8760` |
+| 守恒**不等于**经济在工作 | 支出按余额、房东也消费、利润回流家庭 | `--sim-soak` 的反塌缩三条（BUG-011） |
+| 就业是商铺数的折叠，不是独立数字 | `CitySim.reconcile_jobs` | `--sim-test` 折叠断言 |
+| 街道密度是经济的下游 | `crowd_factor_at` / `car_factor_at` | `--sim-test` 接入断言（未接入会恒 1.0 而无法被发现） |
+| 模拟随钟点整点推进，绝不每帧 | `GameRoot._process` 的 `_sim_hour` 边沿 | `Pipeline/run.sh` 第 6 步 `[sim] day` 计数 |
 
 ## 2. 后端（`backend/`）
 
@@ -78,6 +91,25 @@ Client ──HTTP──► backend/server.mjs
 | 73-74 | 游戏模式系统 | ❌ 无 | 依赖创造工具补全 |
 | 75,77 | Steam 发行 / 崩溃报告 | ❌ 无 | 需要 Steamworks 账号与打包环境 |
 | 78 | 反作弊 | 🟡 经济侧服务器权威已实现 | 移动/伤害权威需多人同步层 |
+
+## 3b. Part 8（城市动态模拟）要求但**尚未实现**的东西
+
+同样明确列出。已实现部分见 `Docs/PROJECT_STATUS.md` 的 P81-123 行组。
+
+| Phase | 要求 | 现状 | 缺口在哪 |
+|---|---|---|---|
+| 83-88 | NPC 个体经济身份（FSOWNPCData 四档） | 🟡 有 tier0/1/2 分层与作息，但个体不持有工资/记忆 | 行人读区级 `crowd_factor`，不是"我这份工资涨了" |
+| 96-97 | 显式道路图与路网容量 | ❌ 无 | 车辆走 Lattice 隐式格网，边无容量、路口无通行权 |
+| 98 | 公共交通 / 地铁 | ❌ 无 | 公交车只是车辆的一种外观，无线路与站点语义 |
+| 99 | 城市事件（事故/施工/集会） | 🟡 仅 `OPEN/CLOSE/PLAYER_*` 经济事件 | 无空间事件，不影响路况与出行需求 |
+| 101 | 社会关系 | ❌ 无 | — |
+| 102 | NPC 长期记忆 | ❌ 无 | NPCProfile 有心情值，但不跨会话、不影响经济 |
+| 103 | 动态任务生成 | ❌ 无 | 任务工具仍是占位（创造模式按键 6） |
+| 110-111 | 城市数据库与跨会话持久化 | 🟡 `snapshot()/restore()` 只在内存 | 未接入 `backend/` 的存档三代，重启即回播种态 |
+| 113 | AI 城市导演 | ❌ 无 | 当前戏剧性变化全部来自市场自身折叠，非导演调度 |
+
+**为什么不先做成"看起来完成"**：导演、关系、记忆三项若没有可断言的下游效应，写出来只是带字段名
+的空壳，规格明令禁止。因此先把守恒、反塌缩、价格响应、消费端接入钉成门禁，再逐项往上加。
 
 ## 4. 目标架构（保留规格原意，标注为设计而非事实）
 
