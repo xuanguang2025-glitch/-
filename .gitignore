@@ -3,3 +3,4 @@ shots/
 *.tmp
 extension_api.json
 Pipeline/logs/
+backend/data/

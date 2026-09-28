@@ -61,6 +61,9 @@ ok "全城流式 ≤ ${MAX_STREAM_MS} ms（当前 ${LOAD_MS:-未解析}）" \
 ok "创造压力 ≥ $(( STRESS_OBJECTS * 9 / 10 )) 件（当前 ${PLACED:-未解析}）" \
    "[ -n \"$PLACED\" ] && [ \"$PLACED\" -ge $(( STRESS_OBJECTS * 9 / 10 )) ]"
 ok "无 chunk 卸载抖动（freed=${FREED:-未解析}）"              "[ \"$FREED\" = \"0\" ]"
+BT=$(num 'backend: [0-9]+' "$LOG/backend.log"); BT_T=$(grep -oE 'backend: [0-9]+/[0-9]+' "$LOG/backend.log" 2>/dev/null | cut -d/ -f2)
+ok "后端契约测试全通过（${BT:-未运行}/${BT_T:-未运行}）" \
+   "[ -n \"$BT\" ] && [ \"$BT\" = \"$BT_T\" ] && [ \"$BT\" != \"0\" ]"
 ok "静态审查 $REV"                                           "printf '%s' \"$REV\" | grep -q PASS"
 echo
 echo "## 模块"

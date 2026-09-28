@@ -17,27 +17,27 @@ die() { RUNFAIL=1; printf 'GATE-FAIL  %s\n' "$1"; }
 
 if [ ! -f "$GODOT" ]; then echo "找不到 Godot：$GODOT（用 GODOT=<path> 指定）"; exit 2; fi
 
-say "1/6 解析与类注册"
+say "1/7 解析与类注册"
 "$GODOT" --headless --editor --quit --path . >"$LOGDIR/parse.log" 2>&1
 PE=$(grep -ciE "parse error|script error|failed to load" "$LOGDIR/parse.log" || true)
 [ "$PE" = "0" ] && echo "parse: clean" || { grep -iE "parse error|script error" "$LOGDIR/parse.log" | head -5; die "解析错误 $PE 处"; }
 
-say "2/6 无头启动"
+say "2/7 无头启动"
 "$GODOT" --headless --path . --quit-after 60 >"$LOGDIR/boot.log" 2>&1
 BE=$(grep -ciE "^ERROR|SCRIPT ERROR" "$LOGDIR/boot.log" || true)
 [ "$BE" = "0" ] && echo "boot: 0 error" || { grep -iE "^ERROR|SCRIPT ERROR" "$LOGDIR/boot.log" | head -5; die "启动错误 $BE 条"; }
 
-say "3/6 功能自测"
+say "3/7 功能自测"
 "$GODOT" --headless --path . --quit-after 150 -- --create-test >"$LOGDIR/create.log" 2>&1
 grep -q "creation self-test: PASS" "$LOGDIR/create.log" && echo "create-test: PASS" || { grep "FAIL" "$LOGDIR/create.log" | head -5; die "create-test"; }
 "$GODOT" --path . --resolution 1280x720 -- --validate-test --spawn=1150,300 >"$LOGDIR/validate.log" 2>&1
 grep -q "validation self-test: PASS" "$LOGDIR/validate.log" && echo "validate-test: PASS" || { grep "FAIL" "$LOGDIR/validate.log" | head -5; die "validate-test"; }
 
-say "4/6 世界普查"
+say "4/7 世界普查"
 "$GODOT" --headless --path . --quit-after 60 -- --census >"$LOGDIR/census.log" 2>&1
 grep -E "^\[census\] cells" "$LOGDIR/census.log" || die "census 无输出"
 
-say "5/6 性能与压力"
+say "5/7 性能与压力"
 "$GODOT" --path . --resolution 1280x720 -- "--shots=1" "--shot-every=20" \
   "--shot-dir=$(pwd -W 2>/dev/null || pwd)/$LOGDIR" --time=10.0 --spawn=1150,300 >"$LOGDIR/perf.log" 2>&1
 CHUNK_MS=$(sum_ms "$LOGDIR/perf.log")
@@ -65,7 +65,23 @@ PLACED=$(num 'placed=[0-9]+' "$LOGDIR/stress.log")
 require "压力放置数" "$PLACED"
 [ "$PLACED" -ge $(( STRESS_OBJECTS * 9 / 10 )) ] || die "仅放置 $PLACED/$STRESS_OBJECTS 件"
 
-say "6/6 静态审查"
+say "6/7 后端契约测试"
+if command -v node >/dev/null 2>&1; then
+  node backend/test.mjs >"$LOGDIR/backend.log" 2>&1
+  tail -1 "$LOGDIR/backend.log"
+  # grep -E has no back-references, so compare the two numbers explicitly and fail closed
+  # when either is missing.
+  BT=$(num 'backend: [0-9]+' "$LOGDIR/backend.log")
+  BT_TOTAL=$(grep -oE 'backend: [0-9]+/[0-9]+' "$LOGDIR/backend.log" | cut -d/ -f2)
+  require "后端断言数" "$BT"
+  require "后端断言总数" "$BT_TOTAL"
+  { [ -n "$BT" ] && [ "$BT" = "$BT_TOTAL" ] && [ "$BT" != "0" ]; } \
+    || { grep '^FAIL' "$LOGDIR/backend.log" | head -8; die "后端契约测试 $BT/$BT_TOTAL"; }
+else
+  die "未找到 node，后端契约测试无法执行（该门禁不可跳过）"
+fi
+
+say "7/7 静态审查"
 bash Pipeline/review.sh | tee "$LOGDIR/review.log"
 grep -q "review: PASS" "$LOGDIR/review.log" || die "review.sh"
 
