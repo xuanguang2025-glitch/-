@@ -20,6 +20,7 @@ const TIER1 := 460.0
 const ARRIVE_R := 115.0
 
 var agents: Array = []
+var pinned: Array = []		# player-created residents; never subject to the budget
 var budget := 260
 var sim: CitySim
 var sim_radius := 700.0
@@ -118,19 +119,23 @@ func _process(delta: float) -> void:
 	var ca: Array[Color] = []
 	var cb: Array[Color] = []
 	_hidden = 0
-	for ag in agents:
-		_step(ag, delta)
-		var prof: NPCProfile = ag["prof"]
-		if ag["hidden"]:
-			_hidden += 1
-			continue
-		var xform := _transform(ag)
-		if int(prof.id) % 2 == 0:
-			ta.append(xform)
-			ca.append(ag["col"])
-		else:
-			tb.append(xform)
-			cb.append(ag["col"])
+	for li in 2:
+		# Budget agents and player-created ones are stepped and drawn by the same code; the
+		# only difference is which list they live in, so there is no second NPC path to drift.
+		var list: Array = agents if li == 0 else pinned
+		for ag in list:
+			_step(ag, delta)
+			var prof: NPCProfile = ag["prof"]
+			if ag["hidden"]:
+				_hidden += 1
+				continue
+			var xform := _transform(ag)
+			if int(prof.id) % 2 == 0:
+				ta.append(xform)
+				ca.append(ag["col"])
+			else:
+				tb.append(xform)
+				cb.append(ag["col"])
 	# Stride phase picks the pose, so a crowd does not march in lockstep.
 	var swap := int(Time.get_ticks_msec() / (1000.0 / POSE_HZ)) % 2
 	if swap == 1:
@@ -156,6 +161,11 @@ func _step(ag: Dictionary, delta: float) -> void:
 	var d := Vector2(ag["pos"].x - here.x, ag["pos"].y - here.y).length()
 	ag["tier"] = 0 if d < TIER0 else (1 if d < TIER1 else 2)
 	if d > sim_radius:
+		if ag.has("owner"):
+			# A resident the player created stays where they were put. Re-seeding them near
+			# the camera would make every visit teleport the people you made.
+			ag["hidden"] = true
+			return
 		_seed(ag)
 		return
 	# Re-planning resolves a goal position, which samples the pools — so it is throttled
@@ -251,12 +261,14 @@ func _transform(ag: Dictionary) -> Transform3D:
 		Vector3(p.x, 0.0, p.y))
 
 
-## Put an agent on a real street near the viewer, with a resident assigned to it.
-func _seed(ag: Dictionary) -> void:
+## Put an agent on a real street near `center`, within `radius`. Returns false when no
+## carriageway was found in the attempts, so the caller decides what a failure means: a budget
+## agent gets parked and retried, a player-created one is reported as not placed.
+func _place(ag: Dictionary, center: Vector2, radius: float) -> bool:
 	for attempt in 12:
 		var ang := _rng.randf() * TAU
-		var rad := pow(_rng.randf(), 2.2) * SPAWN_RADIUS
-		var p := Vector2(focus.x, focus.z) + Vector2(cos(ang), sin(ang)) * rad
+		var rad := pow(_rng.randf(), 2.2) * radius
+		var p := center + Vector2(cos(ang), sin(ang)) * rad
 		var hit := Lattice.random_edge_near(p, 3, _rng)
 		if hit.is_empty():
 			continue
@@ -284,7 +296,13 @@ func _seed(ag: Dictionary) -> void:
 		var d0 := (b0 - a0).normalized()
 		ag["pos"] = a0.lerp(b0, ag["t"]) + Vector2(-d0.y, d0.x) * ag["side"]
 		ag["dir"] = d0
-		return
+		return true
+	return false
+
+
+## No street found: hold the agent off-map so it retries next frame rather than piling up on
+## the camera.
+func _park(ag: Dictionary) -> void:
 	ag["prof"] = NPCProfile.new()
 	ag["node"] = Vector2i(9999, 9999)
 	ag["target"] = Vector2i(9999, 9999)
@@ -302,6 +320,51 @@ func _seed(ag: Dictionary) -> void:
 	ag["col"] = cc
 
 
+## Put an agent on a real street near the viewer, with a resident assigned to it.
+func _seed(ag: Dictionary) -> void:
+	if _place(ag, Vector2(focus.x, focus.z), SPAWN_RADIUS):
+		return
+	_park(ag)
+
+
+# --- Player-created residents ------------------------------------------------
+## Someone the editor placed is not part of the budget: they are never evicted when the crowd
+## thins, they keep the name and occupation the player gave them, and they are seeded where they
+## were placed rather than near whoever is looking. They are stepped and drawn by the same code
+## as budget agents, so there is no second NPC renderer to drift out of sync.
+func pin(st: Dictionary) -> bool:
+	var ag := {}
+	if not _place(ag, Vector2(float(st["x"]), float(st["z"])), 24.0):
+		_park(ag)
+	var prof: NPCProfile = ag["prof"]
+	if st.has("name"):
+		prof.display_name = String(st["name"])
+	if st.has("occ"):
+		prof.occ = int(st["occ"])
+	ag["owner"] = int(st["id"])
+	ag["plan_t"] = 0.0
+	pinned.append(ag)
+	return not ag["hidden"]
+
+
+func unpin(obj_id: int) -> void:
+	for i in pinned.size():
+		if int(pinned[i].get("owner", -1)) == obj_id:
+			pinned.remove_at(i)
+			return
+
+
+func unpin_all() -> void:
+	pinned.clear()
+
+
+func has_pinned(obj_id: int) -> bool:
+	for ag in pinned:
+		if int(ag.get("owner", -1)) == obj_id:
+			return true
+	return false
+
+
 ## The closest pedestrian, for the HUD and for whatever interaction system consumes them.
 ## Scanning every agent each frame is pure waste — this refreshes four times a second.
 var _near_cache: Dictionary = {}
@@ -313,13 +376,15 @@ func nearest() -> Dictionary:
 		return _near_cache
 	var best := 1e18
 	var out: Dictionary = {}
-	for ag in agents:
-		if ag.has("prof") and not ag.get("hidden", true):
-			var p: Vector2 = ag["pos"]
-			var d := Vector2(p.x - focus.x, p.y - focus.z).length()
-			if d < best:
-				best = d
-				out = ag
+	for li in 2:
+		var list: Array = agents if li == 0 else pinned
+		for ag in list:
+			if ag.has("prof") and not ag.get("hidden", true):
+				var p: Vector2 = ag["pos"]
+				var d := Vector2(p.x - focus.x, p.y - focus.z).length()
+				if d < best:
+					best = d
+					out = ag
 	_near_t = 0.25
 	_near_cache = {"agent": out, "dist": best if best < 1e17 else -1.0}
 	return _near_cache
@@ -332,5 +397,5 @@ func stats() -> Dictionary:
 	for ag in agents:
 		if ag.get("tier", 2) == 0:
 			t0 += 1
-	return {"agents": agents.size(), "drawn": drawn, "hidden": _hidden,
-		"near": float(n["dist"]), "who": n["agent"], "tier0": t0}
+	return {"agents": agents.size() + pinned.size(), "drawn": drawn, "hidden": _hidden,
+		"pinned": pinned.size(), "near": float(n["dist"]), "who": n["agent"], "tier0": t0}

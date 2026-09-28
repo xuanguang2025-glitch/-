@@ -18,8 +18,24 @@ static func _shade(code: float, c: Color) -> Color:
 	return CellProgram.col(code, c)
 
 
-## 悬铃木 — Shanghai's street tree. Wider and flatter-crowned than the park tree, which is how
-## the avenue rows read against the block fronts.
+## The footprint marker for a player-created person: a small ring on the pavement. It is the
+## only geometry the NPC tool emits, because the person themselves is drawn by the crowd
+## system — a second body renderer here would be a second source of truth about what they look
+## like, and it would not follow their schedule.
+static func person_marker(ctx: ChunkCtx) -> void:
+	var ring := _shade(P, Color(0.95, 0.78, 0.28))
+	for i in 10:
+		var a0 := TAU * float(i) / 10.0
+		var a1 := TAU * float(i + 1) / 10.0
+		var p0 := Vector2(cos(a0), sin(a0)) * 0.62
+		var p1 := Vector2(cos(a1), sin(a1)) * 0.62
+		var q0 := Vector2(cos(a0), sin(a0)) * 0.42
+		var q1 := Vector2(cos(a1), sin(a1)) * 0.42
+		ctx.streets.quad(Vector3(p0.x, 0.03, p0.y), Vector3(p1.x, 0.03, p1.y),
+			Vector3(q1.x, 0.03, q1.y), Vector3(q0.x, 0.03, q0.y), Vector3.UP, ring)
+	ctx.emissive.ellipsoid(Transform3D(Basis.IDENTITY, Vector3(0.0, 0.05, 0.0)),
+		Vector3(0.34, 0.02, 0.34), Color(1.0, 0.86, 0.42), 3, 8)
+
 static func plane_tree(ctx: ChunkCtx, c: Vector2, r: float) -> void:
 	var s := 0.85 + r * 0.5
 	ctx.props.cylinder(Transform3D(Basis.IDENTITY, Vector3(c.x, 0.0, c.y)),

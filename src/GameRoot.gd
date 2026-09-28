@@ -548,13 +548,11 @@ func _create_test() -> void:
 	for i in xspots.size():
 		creation.tpl_i = i
 		creation.place(xspots[i])
-	var recount := 0
-	for k in creation.objects.keys():
-		recount += int((creation.objects[k] as Dictionary).get("tris", 0))
-	_check_that("增量预算与全表重算一致", creation._tris_total == recount,
-		"%d vs %d" % [creation._tris_total, recount])
+	var recount := creation._budget.recount(creation.objects)
+	_check_that("增量预算与全表重算一致", creation._budget.total() == recount,
+		"%d vs %d" % [creation._budget.total(), recount])
 	creation.clear_all()
-	_check("清空后预算归零", creation._tris_total, 0)
+	_check("清空后预算归零", creation._budget.total(), 0)
 
 	# Phase 136 / 168: the point of the whole creation stack is that building something changes
 	# the city, so this asserts the ledger moves because a player placed a shop - and that undo
@@ -604,6 +602,54 @@ func _create_test() -> void:
 		"%d vs %d" % [sim.money_total(), money0])
 
 	creation.clear_all()
+
+	# Phase 137: a created person. The claim is not "a record was added" but that the crowd
+	# system holds them under the name and occupation the player chose, that emptying the
+	# pedestrian budget does not evict them, and that undo/redo and a save round-trip keep the
+	# same individual rather than a stranger standing at the same coordinate.
+	creation._set_tool(CreationSystem.Tool.NPC)
+	_check("NPC 身份种类", NPCPresets.count(), 8)
+	_check("NPC 工具取身份表为当前模板", String(creation._tpl()["kind"]), "npc")
+	var nspots := ValidationTests.find_spots(1, 1.0, streamer)
+	_check("found an npc spot", nspots.size(), 1)
+	if nspots.size() > 0:
+		creation.tpl_i = 0
+		var nid := creation.place(nspots[0])
+		_check("创建的人进入人群集合", crowd.has_pinned(nid), true)
+		var prof: NPCProfile = null
+		for ag in crowd.pinned:
+			if int(ag.get("owner", -1)) == nid:
+				prof = ag["prof"]
+		_check("姓名由玩家决定",
+			prof != null and prof.display_name == String(NPCPresets.LIST[0]["name"]), true)
+		_check("职业取自职业表",
+			prof != null and int(prof.occ) == int(NPCPresets.LIST[0]["occ"]), true)
+		# Drive one crowd tick with the pedestrian budget at zero: budget agents go, the person
+		# the player made stays. That is the difference between "pinned" meaning something and
+		# it merely being a second array.
+		crowd.budget = 0
+		crowd.focus = Vector3(nspots[0].x, 1.5, nspots[0].y)
+		crowd._process(0.1)
+		_check_that("清空行人预算不搬走创建的人",
+			crowd.agents.size() == 0 and crowd.pinned.size() == 1,
+			"agents=%d pinned=%d" % [crowd.agents.size(), crowd.pinned.size()])
+		crowd.budget = 260
+		creation.undo()
+		_check("撤销后从人群移除", crowd.has_pinned(nid), false)
+		creation.redo()
+		_check("重做后回到人群", crowd.has_pinned(nid), true)
+		_check("npc save", creation.save_edits(), true)
+		creation.clear_all()
+		_check("npc reload", creation.load_edits(), 1)
+		var same_person := false
+		for ag in crowd.pinned:
+			var p2: NPCProfile = ag["prof"]
+			if p2.display_name == String(NPCPresets.LIST[0]["name"]) \
+					and int(p2.occ) == int(NPCPresets.LIST[0]["occ"]):
+				same_person = true
+		_check("读盘后仍是同一个人", same_person, true)
+		creation.clear_all()
+		_check("清空作品也移走创建的人", crowd.pinned.size(), 0)
 
 	if FileAccess.file_exists(CreationSystem.SAVE_PATH):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(CreationSystem.SAVE_PATH))

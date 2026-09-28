@@ -50,11 +50,12 @@ var _reason: int = Validation.Reason.OK
 var _cursor := Vector2(INF, INF)
 var _road_a: Variant = null
 var sim: CitySim
+var crowd: CrowdSystem
 var _business := BusinessRegistry.new()
 
 var _todo_tools := {
 	Tool.TERRAIN: "地形工具",
-	Tool.VEHICLE: "车辆工具", Tool.NPC: "NPC 工具", Tool.QUEST: "任务工具",
+	Tool.VEHICLE: "车辆工具", Tool.QUEST: "任务工具",
 }
 
 
@@ -100,6 +101,8 @@ func set_active(on: bool) -> void:
 ## The catalogue the current tool cycles through. Buildings and street props are separate
 ## palettes, so Tab on the decoration tool walks benches and planters rather than twelve towers.
 func _pal() -> Array:
+	if tool == Tool.NPC:
+		return BuildTemplates.npc_palette()
 	return BuildTemplates.palette(tool == Tool.DECOR)
 
 
@@ -113,16 +116,23 @@ func _tpl() -> Dictionary:
 ## control lie about what would appear would make the ghost disagree with the built object.
 func _tpl_scaled(sc: float) -> Dictionary:
 	var t: Dictionary = _tpl().duplicate()
-	if String(t["kind"]) == "prop":
+	if _no_scale(t):
 		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
 	return t
 
 
+## Street furniture and people are placed at their true metric size: a bench that stretches to
+## three metres is not a thing a street needs, and neither is a person.
+static func _no_scale(t: Dictionary) -> bool:
+	var k := String(t["kind"])
+	return k == "prop" or k == "npc"
+
+
 func _tpl_of(id: String, sc: float) -> Dictionary:
 	var t: Dictionary = BuildTemplates.find(id).duplicate()
-	if String(t["kind"]) == "prop":
+	if _no_scale(t):
 		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
@@ -157,27 +167,28 @@ func _validate(c: Vector2) -> int:
 		_projected_tris())
 
 
-## Triangles the world already holds from player content. Maintained incrementally by _store
-## and _destroy rather than summed per placement: a budget check that scanned the whole object
-## table would make every click cost what the last click cost, and the 1000-object stress pass
-## would go quadratic for the same reason the economy registration had to stay O(1).
-var _tris_total := 0
-
-## Each object's own measured cost, so removal subtracts exactly what was added.
-var _tris_of: Dictionary = {}
+## What the world's player content costs, tracked per object by TriangleBudget.
+var _budget := TriangleBudget.new()
 
 
-## What the world would hold if the current template were accepted: existing objects at the
-## triangle count measured when they were built, the candidate at what its generator emits.
-## Nothing here is a guess about the renderer's cost.
+## The simulation this content has to report to, resolved by group rather than assigned.
 func _sim() -> CitySim:
 	if sim == null:
 		sim = get_tree().get_first_node_in_group("sim")
 	return sim
 
 
+## Created people are handed to the crowd system, which is the only thing that draws and steps
+## them. Resolved by group for the same reason as the simulation: an unattached reference would
+## silently place markers with nobody standing on them.
+func _crowd() -> CrowdSystem:
+	if crowd == null:
+		crowd = get_tree().get_first_node_in_group("crowd")
+	return crowd
+
+
 func _projected_tris() -> int:
-	return _tris_total + BuildTemplates.tri_cost(String(_tpl()["id"]))
+	return _budget.projected(String(_tpl()["id"]))
 
 
 func _rebuild_ghost() -> void:
@@ -233,6 +244,11 @@ func place(c: Vector2) -> int:
 	var t := _tpl()
 	var st := {"id": id, "tpl": String(t["id"]), "x": c.x, "z": c.y,
 		"yaw": yaw, "scale": obj_scale}
+	if String(t["kind"]) == "npc":
+		# The identity travels with the record, so a reload recreates the same person rather
+		# than a random stranger standing at the same coordinate.
+		st["name"] = String(t["name"])
+		st["occ"] = int(t["occ"])
 	# Through _put, not around it: that is where the economy learns that a business exists, and
 	# a second insertion path would let a click place something the ledger never sees.
 	_put(st)
@@ -256,7 +272,7 @@ func road_click(c: Vector2) -> int:
 		return -1
 	var mid := (a + c) * 0.5
 	_reason = Validation.check(mid, a.distance_to(c) * 0.5, _near_centers(), streamer,
-		_tris_total + BuildTemplates.road_cost(a, c, 12.0))
+		_budget.total() + BuildTemplates.road_cost(a, c, 12.0))
 	if _reason != Validation.Reason.OK:
 		GameGlobals.say("不能建造：%s" % Validation.label(_reason))
 		return -1
@@ -439,8 +455,9 @@ func _destroy(id: int) -> void:
 		n.free()
 	nodes.erase(id)
 	_business.destroy(id, sim)
-	_tris_total -= int(_tris_of.get(id, 0))
-	_tris_of.erase(id)
+	if crowd != null:
+		crowd.unpin(id)
+	_budget.remove(id)
 	objects.erase(id)
 	bounds.erase(id)
 	if selected == id:
@@ -543,10 +560,11 @@ func _store(st: Dictionary) -> void:
 	objects[id] = (st as Dictionary).duplicate()
 	_realize(objects[id])
 	var t := int(objects[id].get("tris", 0))
-	_tris_total += t - int(_tris_of.get(id, 0))
-	_tris_of[id] = t
+	_budget.add(id, t)
 	_sim()
 	_business.store(objects[id], sim)
+	if String(BuildTemplates.find(String(st["tpl"]))["kind"]) == "npc":
+		_crowd().pin(objects[id])
 
 
 func _put(st: Dictionary) -> void:
@@ -575,6 +593,10 @@ static func _normalize(raw: Dictionary) -> Dictionary:
 	st["z"] = float(st.get("z", 0.0))
 	st["yaw"] = float(st.get("yaw", 0.0))
 	st["scale"] = float(st.get("scale", 1.0))
+	if st.has("name"):
+		st["name"] = String(st["name"])
+	if st.has("occ"):
+		st["occ"] = int(st["occ"])
 	for k in ["x2", "z2", "width"]:
 		if st.has(k):
 			st[k] = float(st[k])
@@ -715,11 +737,12 @@ func clear_all() -> void:
 	_mark = null
 	_undo.clear()
 	_redo.clear()
-	_tris_total = 0
-	_tris_of.clear()
+	_budget.clear()
 	# Bypasses _destroy, so every registration has to be released here or a cleared city would
 	# keep employing staff for shops that no longer exist.
 	_business.clear(_sim())
+	if crowd != null:
+		crowd.unpin_all()
 	changed.emit()
 
 
@@ -731,7 +754,7 @@ func stats() -> Dictionary:
 		"active": active, "reason": Validation.label(_reason),
 		"zone": CreationZones.label(z),
 		"zone_max": CreationZones.max_half(_cursor) if has_cursor else 0.0,
-		"tris": _tris_total, "tris_max": Validation.MAX_TRIS,
+		"tris": _budget.total(), "tris_max": Validation.MAX_TRIS,
 		"ok": _reason == Validation.Reason.OK, "road_pending": _road_a != null}
 
 
@@ -808,15 +831,17 @@ func _set_tool(t: int) -> void:
 	tool = t
 	_road_a = null
 	_ghost_key = ""
-	var pal := BuildTemplates.palette(t == Tool.DECOR)
+	var pal := _pal()
 	tpl_i = clampi(tpl_i, 0, pal.size() - 1)
 	if t == Tool.ROAD:
 		GameGlobals.say("道路工具 — 点两次成一段（车道 + 人行道 + 路灯），右键取消")
 	elif t == Tool.DECOR:
 		GameGlobals.say("装饰工具 — %d 种街道构件，Tab 换构件（构件按真实尺寸放置，不参与缩放）"
 			% pal.size())
+	elif t == Tool.NPC:
+		GameGlobals.say("NPC 工具 — %d 种身份，Tab 换身份；创建的人不参与人群预算" % pal.size())
 	elif _todo_tools.has(t):
-		GameGlobals.say("%s — 待实现（当前可用：建筑、道路、装饰）" % String(_todo_tools[t]))
+		GameGlobals.say("%s — 待实现（当前可用：建筑、道路、装饰、NPC）" % String(_todo_tools[t]))
 	else:
 		GameGlobals.say("工具：建筑 — Tab 换模板，共 %d 种" % pal.size())
 

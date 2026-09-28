@@ -120,7 +120,15 @@ static func find(id: String) -> Dictionary:
 	for t in DECOR:
 		if String(t["id"]) == id:
 			return t
+	if id.begins_with("npc_"):
+		return NPCPresets.find(id)
 	return TEMPLATES[0]
+
+
+## The NPC palette lives in NPCPresets rather than here: those entries are people, not
+## geometry, and folding them into the building catalogue would imply they can be scaled.
+static func npc_palette() -> Array:
+	return NPCPresets.LIST
 
 
 ## A rectangle centred on c, rotated by yaw, in the same world XZ space the generators use.
@@ -148,6 +156,11 @@ static func build(ctx: ChunkCtx, tpl: Dictionary, quad: PackedVector2Array, r: f
 	var tint := Assets.tint_for(style, r)
 	var h := float(tpl["height"])
 	match String(tpl["kind"]):
+		"npc":
+			# A created person walks away from here, so what is built is only the marker showing
+			# where the player put them. Emitting nothing would make the ghost invisible and the
+			# placement unconfirmable at a glance.
+			Props.person_marker(ctx)
 		"prop":
 			# Props are emitted around the node origin; the object's own yaw and position come
 			# from the node transform, so a bench rotates by editing one transform like anything
