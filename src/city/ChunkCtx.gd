@@ -34,6 +34,13 @@ func begin_ground(min_p: Vector2, n: int, step: float) -> void:
 	ground_n = n
 	ground_cols.resize(n * n)
 	ground_cols.fill(UNPAINTED)
+	occupied.resize(n * n)
+	occupied.fill(0)
+
+
+## Slots covered by a building this chunk actually emitted. Kept alongside the colour grid
+## so "can something be built here" is answerable without a spatial index of every tower.
+var occupied: PackedByteArray
 
 
 ## Fill the slots whose sample point falls inside this block's plot polygon.
@@ -56,6 +63,34 @@ func paint_plate(quad: PackedVector2Array, col: Color) -> void:
 			var c := ground_min + Vector2(float(i) + 0.5, float(j) + 0.5) * ground_step
 			if Lattice.quad_has(quad, c):
 				ground_cols[j * ground_n + i] = col
+
+
+## Mark the footprint a building will cover. Inset because generators pull towers in from
+## the plot edge, and a placement is allowed on the strip between building and street.
+func mark_occupied(quad: PackedVector2Array, inset_m: float) -> void:
+	if ground_n == 0:
+		return
+	var q := quad
+	if inset_m > 0.0:
+		q = CellProgram.inset(quad, inset_m)
+	if q.size() < 3:
+		return
+	var lo := Vector2(1e9, 1e9)
+	var hi := Vector2(-1e9, -1e9)
+	for p in q:
+		lo.x = minf(lo.x, p.x)
+		lo.y = minf(lo.y, p.y)
+		hi.x = maxf(hi.x, p.x)
+		hi.y = maxf(hi.y, p.y)
+	var i0 := clampi(int((lo.x - ground_min.x) / ground_step), 0, ground_n - 1)
+	var i1 := clampi(int((hi.x - ground_min.x) / ground_step), 0, ground_n - 1)
+	var j0 := clampi(int((lo.y - ground_min.y) / ground_step), 0, ground_n - 1)
+	var j1 := clampi(int((hi.y - ground_min.y) / ground_step), 0, ground_n - 1)
+	for i in range(i0, i1 + 1):
+		for j in range(j0, j1 + 1):
+			var c := ground_min + Vector2(float(i) + 0.5, float(j) + 0.5) * ground_step
+			if Lattice.quad_has(q, c):
+				occupied[j * ground_n + i] = 1
 
 
 func setup(seed: int) -> void:

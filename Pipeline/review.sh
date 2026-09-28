@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Static review gate (Part 6 Phase 35). Every rule here exists because that pattern actually
+# broke this project at least once; none of them are stylistic preferences.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+FAIL=0
+note() { printf '%-5s %s\n' "$1" "$2"; }
+hit()  { FAIL=1; printf 'FAIL  %s\n      %s\n' "$1" "$2"; }
+
+SRC="src"
+MAX_LINES="${FILE_MAX_LINES:-900}"
+
+# R1  GDScript binds % tighter than +, so print("a" + "b" % [..]) feeds the argument list to
+#     only the last fragment. This bit three separate call sites.
+bad=$(grep -rnE 'print\("[^"]*"[[:space:]]*\+[[:space:]]*$' "$SRC" 2>/dev/null \
+      | grep -v 'print(("' || true)
+if [ -n "$bad" ]; then hit "R1 多行格式化字符串缺少外层括号" "$(echo "$bad" | head -3)"; else note pass "R1 格式化字符串括号配对"; fi
+
+# R2  Debug scaffolding must not survive into a commit.
+bad=$(grep -rnE 'print\("\[dbg' "$SRC" 2>/dev/null || true)
+if [ -n "$bad" ]; then hit "R2 残留调试打印" "$bad"; else note pass "R2 无调试残留"; fi
+
+# R3  Dictionary.get(key, []) allocates the default on every miss. In a per-sample spatial
+#     scan that is one allocation per empty bucket, which dominated chunk builds here.
+bad=$(grep -rnE '\.get\([^)]*,[[:space:]]*\[\][[:space:]]*\)' "$SRC/city" 2>/dev/null || true)
+if [ -n "$bad" ]; then hit "R3 热路径中 .get(k, []) 分配空数组" "$bad"; else note pass "R3 空间索引无默认值分配"; fi
+
+# R4  File size ceiling keeps modules reviewable by the next agent.
+bad=$(awk 'END{}' /dev/null; find "$SRC" -name '*.gd' -exec wc -l {} + 2>/dev/null \
+      | awk -v m="$MAX_LINES" '$1>m && $2!="total"{print $1" "$2}' || true)
+if [ -n "$bad" ]; then hit "R4 单文件超过 ${MAX_LINES} 行" "$bad"; else note pass "R4 文件规模在限内"; fi
+
+# R5  A deferred item must be traceable to the bug ledger.
+bad=$(grep -rnE '(TODO|FIXME)' "$SRC" 2>/dev/null | grep -v 'BUG-' || true)
+if [ -n "$bad" ]; then hit "R5 TODO/FIXME 未挂 BUG ID" "$bad"; else note pass "R5 无未登记的技术债"; fi
+
+# R6  _init on a Node subclass shadows the constructor and fails only at runtime.
+bad=$(grep -rln 'extends Node' "$SRC" 2>/dev/null | xargs grep -ln 'func _init(' 2>/dev/null || true)
+if [ -n "$bad" ]; then hit "R6 Node 子类使用 _init" "$bad"; else note pass "R6 构造函数命名安全"; fi
+
+echo "-----"
+if [ "$FAIL" -eq 0 ]; then echo "review: PASS (6 rules)"; else echo "review: FAIL"; fi
+exit $FAIL

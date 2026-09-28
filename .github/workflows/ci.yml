@@ -1,0 +1,81 @@
+name: pipeline
+
+# Part 6 Phase 40. Scope is deliberately split by what a GPU-less runner can actually prove:
+# the logic gates run here and are blocking; the rendering and performance gates need a real
+# Vulkan device and therefore run locally via Pipeline/run.sh, not in CI.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.4.1
+
+jobs:
+  logic:
+    name: 解析 / 启动 / 功能自测 / 静态审查
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析 Godot 下载地址（不硬编码 URL）
+        id: url
+        run: |
+          J=$(curl -fsSL "https://api.github.com/repos/godotengine/godot/releases/tags/${GODOT_VERSION}-stable")
+          U=$(printf '%s' "$J" | jq -r '.assets[] | select(.name | test("linux.*x86_64")) | .browser_download_url' | head -1)
+          [ -n "$U" ] && [ "$U" != "null" ] || { echo "找不到 Linux 发行资产"; exit 1; }
+          echo "url=$U" >> "$GITHUB_OUTPUT"
+          echo "下载：$U"
+
+      - name: 安装 Godot
+        run: |
+          sudo apt-get update && sudo apt-get install -y unzip
+          curl -fsSL -o godot.zip "${{ steps.url.outputs.url }}"
+          unzip -q godot.zip -d "$HOME/godot"
+          chmod +x "$HOME/godot"/*
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+          echo "GODOT=$HOME/godot/$(ls "$HOME/godot" | head -1)" >> "$GITHUB_ENV"
+
+      - name: 导入工程并校验解析
+        run: |
+          "$GODOT" --headless --editor --quit --path . >parse.log 2>&1 || true
+          grep -iE "parse error|script error|failed to load" parse.log && exit 1 || echo "parse: clean"
+
+      - name: 无头启动零报错
+        run: |
+          "$GODOT" --headless --path . --quit-after 60 >boot.log 2>&1 || true
+          if grep -qE "^ERROR|SCRIPT ERROR" boot.log; then grep -E "^ERROR|SCRIPT ERROR" boot.log | head; exit 1; fi
+          echo "boot: 0 error"
+
+      - name: 创造系统自测
+        run: |
+          "$GODOT" --headless --path . --quit-after 150 -- --create-test >create.log 2>&1 || true
+          cat create.log | grep -E "PASS|FAIL|self-test"
+          grep -q "creation self-test: PASS" create.log
+
+      - name: 世界普查
+        run: |
+          "$GODOT" --headless --path . --quit-after 60 -- --census 2>&1 | grep -E "^\[census\]|^\[pop\]"
+
+      - name: 静态审查
+        run: bash Pipeline/review.sh
+
+      - name: 交接消息格式自检
+        run: bash Pipeline/check_msg.sh AI_Agents/examples/handoff.json
+
+  artifacts:
+    name: 产物
+    runs-on: ubuntu-22.04
+    needs: logic
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打包源码
+        run: |
+          mkdir -p out
+          git ls-files -z | xargs -0 tar -czf "out/source-${GITHUB_SHA::7}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: out/*.tar.gz
+          retention-days: 14

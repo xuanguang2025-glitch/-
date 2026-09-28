@@ -36,13 +36,20 @@ var next_id := 1
 var _undo: Array = []
 var _redo: Array = []
 var _ghost: Node3D
+var _ghost_mat: StandardMaterial3D
 var _ghost_key := ""
 var _mark: MeshInstance3D
 var _mark_mat: StandardMaterial3D
 var camera: Camera3D
+var streamer: WorldStreamer
+
+## Result of the last validation pass, surfaced in the HUD so a refused placement is
+## attributable rather than mysterious.
+var _reason: int = Validation.Reason.OK
+var _road_a: Variant = null
 
 var _todo_tools := {
-	Tool.ROAD: "道路工具", Tool.TERRAIN: "地形工具", Tool.DECOR: "装饰工具",
+	Tool.TERRAIN: "地形工具", Tool.DECOR: "装饰工具",
 	Tool.VEHICLE: "车辆工具", Tool.NPC: "NPC 工具", Tool.QUEST: "任务工具",
 }
 
@@ -59,6 +66,11 @@ func _ready() -> void:
 	_mark_mat.emission = Color(1.0, 0.78, 0.2)
 	_mark_mat.emission_energy_multiplier = 1.4
 	_mark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ghost_mat = StandardMaterial3D.new()
+	_ghost_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_ghost_mat.albedo_color = Color(0.25, 0.85, 1.0, 0.32)
+	_ghost_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_ghost_mat.no_depth_test = true
 	load_edits()
 
 
@@ -102,7 +114,8 @@ func _tpl_of(id: String, sc: float) -> Dictionary:
 
 # --- Ghost preview ----------------------------------------------------------
 ## Rebuild the preview only when something visible about it changed; generating a tower is
-## not cheap enough to redo on every mouse move.
+## not cheap enough to redo on every mouse move. Validation runs every frame instead, so the
+## preview turns red the moment it crosses into the river or onto a boulevard.
 func _update_ghost(c: Vector2) -> void:
 	var key := "%s|%d|%d" % [String(_tpl()["id"]), int(round(yaw * 100)),
 		int(round(obj_scale * 100))]
@@ -111,6 +124,18 @@ func _update_ghost(c: Vector2) -> void:
 		_rebuild_ghost()
 	_ghost.position = Vector3(c.x, CityData.terrain_y(c), c.y)
 	_ghost.rotation.y = -yaw
+	_reason = _validate(c)
+	_ghost_mat.albedo_color = (Color(0.20, 0.95, 0.45, 0.34) if _reason == Validation.Reason.OK
+		else Color(0.98, 0.22, 0.18, 0.34))
+
+
+func _half_footprint() -> float:
+	var s: Vector2 = Vector2(_tpl()["size"]) * obj_scale
+	return maxf(s.x, s.y) * 0.5
+
+
+func _validate(c: Vector2) -> int:
+	return Validation.check(c, _half_footprint(), _near_centers(), streamer)
 
 
 func _rebuild_ghost() -> void:
@@ -121,17 +146,12 @@ func _rebuild_ghost() -> void:
 	ctx.detail = true
 	var t := _tpl_scaled(obj_scale)
 	BuildTemplates.build(ctx, t, BuildTemplates.rect(Vector2.ZERO, Vector2(t["size"]), 0.0), 0.5)
-	var m := StandardMaterial3D.new()
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(0.25, 0.85, 1.0, 0.32)
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.no_depth_test = true
 	for f in [ctx.buildings, ctx.props, ctx.emissive]:
 		if f.is_empty():
 			continue
 		var mi := MeshInstance3D.new()
 		mi.mesh = f.commit()
-		mi.material_overlay = m
+		mi.material_overlay = _ghost_mat
 		_ghost.add_child(mi)
 
 
@@ -159,10 +179,16 @@ func _snap(p: Vector2) -> Vector2:
 	return Vector2(round(p.x / GRID) * GRID, round(p.y / GRID) * GRID)
 
 
+## The only entry point for new world content, so a player click and an AI generator cannot
+## take different paths past the validator.
 func place(c: Vector2) -> int:
-	var t := _tpl()
+	_reason = _validate(c)
+	if _reason != Validation.Reason.OK:
+		GameGlobals.say("不能建造：%s" % Validation.label(_reason))
+		return -1
 	var id := next_id
 	next_id += 1
+	var t := _tpl()
 	var st := {"id": id, "tpl": String(t["id"]), "x": c.x, "z": c.y,
 		"yaw": yaw, "scale": obj_scale}
 	objects[id] = st
@@ -171,6 +197,43 @@ func place(c: Vector2) -> int:
 	_redo.clear()
 	changed.emit()
 	return id
+
+
+## Two clicks lay a segment: the first anchors it, the second commits. A preview line is kept
+## between them so the player sees the road they are about to make.
+func road_click(c: Vector2) -> int:
+	if _road_a == null:
+		_road_a = c
+		GameGlobals.say("道路：起点已定，再点一次确定终点（右键取消）")
+		return -1
+	var a: Vector2 = _road_a
+	_road_a = null
+	if a.distance_to(c) < 12.0:
+		GameGlobals.say("道路太短，至少 12 m")
+		return -1
+	var mid := (a + c) * 0.5
+	_reason = Validation.check(mid, a.distance_to(c) * 0.5, _near_centers(), streamer)
+	if _reason != Validation.Reason.OK:
+		GameGlobals.say("不能建造：%s" % Validation.label(_reason))
+		return -1
+	var id := next_id
+	next_id += 1
+	var st := {"id": id, "tpl": "road", "x": a.x, "z": a.y,
+		"x2": c.x, "z2": c.y, "yaw": 0.0, "scale": 1.0, "width": 12.0}
+	objects[id] = st
+	_realize(st)
+	_undo.append({"op": "add", "obj": st.duplicate()})
+	_redo.clear()
+	changed.emit()
+	return id
+
+
+func _near_centers() -> Array:
+	var near: Array = []
+	for k in objects.keys():
+		var st: Dictionary = objects[k]
+		near.append(Vector2(float(st["x"]), float(st["z"])))
+	return near
 
 
 ## Objects are generated around their own origin and positioned by their node, so the whole
@@ -188,14 +251,24 @@ func _realize(st: Dictionary) -> void:
 	node.position = Vector3(c.x, gy, c.y)
 	node.rotation.y = -float(st["yaw"])
 	var sc := float(st["scale"])
-	var t: Dictionary = _tpl_of(String(st["tpl"]), sc)
 	var ctx := ChunkCtx.new()
 	ctx.setup(11)
 	ctx.detail = true
-	BuildTemplates.build(ctx, t, BuildTemplates.rect(Vector2.ZERO, Vector2(t["size"]), 0.0),
-		_seed_of(id))
-	var bags := [[ctx.buildings, Assets.facade_mat()], [ctx.props, Assets.props_mat()],
-		[ctx.emissive, Assets.emissive_mat()]]
+	if String(st["tpl"]) == "road":
+		# Roads are anchored at their start point, so the segment is built in node-local
+		# space and the whole thing stays movable by editing one transform.
+		BuildTemplates.build_road(ctx, Vector2.ZERO,
+			Vector2(float(st["x2"]), float(st["z2"])) - c, float(st["width"]))
+	else:
+		var t: Dictionary = _tpl_of(String(st["tpl"]), sc)
+		BuildTemplates.build(ctx, t,
+			BuildTemplates.rect(Vector2.ZERO, Vector2(t["size"]), 0.0), _seed_of(id))
+	var bags := [
+		[ctx.buildings, Assets.facade_mat(), true],
+		[ctx.props, Assets.props_mat(), true],
+		[ctx.streets, Assets.road_mat(2, true, 12.5), false],
+		[ctx.plates, Assets.ground_mat(), false],
+		[ctx.emissive, Assets.emissive_mat(), false]]
 	for pair in bags:
 		var f: MeshFusion = pair[0]
 		if f.is_empty():
@@ -203,7 +276,8 @@ func _realize(st: Dictionary) -> void:
 		var mi := MeshInstance3D.new()
 		mi.mesh = f.commit()
 		mi.material_overlay = pair[1]
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		mi.cast_shadow = (GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pair[2]
+			else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
 		node.add_child(mi)
 	var body := StaticBody3D.new()
 	body.collision_layer = LAYER_WORLD | LAYER_EDIT
@@ -316,8 +390,13 @@ func duplicate_selected() -> void:
 	var st: Dictionary = _snapshot(selected)
 	st["id"] = next_id
 	next_id += 1
-	var t := _tpl_of(String(st["tpl"]), float(st["scale"]))
-	st["x"] = float(st["x"]) + Vector2(t["size"]).x * 0.75
+	if String(st["tpl"]) == "road":
+		var w := float(st.get("width", 12.0))
+		st["z"] = float(st["z"]) + w + 6.0
+		st["z2"] = float(st["z2"]) + w + 6.0
+	else:
+		var t := _tpl_of(String(st["tpl"]), float(st["scale"]))
+		st["x"] = float(st["x"]) + Vector2(t["size"]).x * 0.75
 	objects[int(st["id"])] = st
 	_realize(st)
 	_undo.append({"op": "add", "obj": st.duplicate()})
@@ -457,7 +536,8 @@ func clear_all() -> void:
 func stats() -> Dictionary:
 	return {"objects": objects.size(), "selected": selected, "tool": tool,
 		"tpl": String(_tpl()["name"]), "undo": _undo.size(), "redo": _redo.size(),
-		"active": active}
+		"active": active, "reason": Validation.label(_reason),
+		"ok": _reason == Validation.Reason.OK, "road_pending": _road_a != null}
 
 
 # --- Input ------------------------------------------------------------------
@@ -508,36 +588,88 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
+			var p := _ground_point()
+			if tool == Tool.ROAD:
+				var rid := road_click(p)
+				if rid >= 0:
+					select(rid)
+				get_viewport().set_input_as_handled()
+				return
 			var hit_id := pick()
 			if event.ctrl_pressed and hit_id >= 0:
 				remove(hit_id)
 			elif hit_id >= 0:
 				select(hit_id)
 			else:
-				select(place(_ground_point()))
+				select(place(p))
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			_road_a = null
 			select(-1)
 			get_viewport().set_input_as_handled()
 
 
 func _set_tool(t: int) -> void:
 	tool = t
-	if _todo_tools.has(t):
-		GameGlobals.say("%s — 待实现（当前仅建筑工具可用）" % String(_todo_tools[t]))
+	_road_a = null
+	_ghost_key = ""
+	if t == Tool.ROAD:
+		GameGlobals.say("道路工具 — 点两次成一段（车道 + 人行道 + 路灯），右键取消")
+	elif _todo_tools.has(t):
+		GameGlobals.say("%s — 待实现（当前仅建筑与道路工具可用）" % String(_todo_tools[t]))
 	else:
 		GameGlobals.say("工具：建筑 — Tab 换模板，共 %d 种" % BuildTemplates.count())
 
 
 func _process(_delta: float) -> void:
-	if not active or tool != Tool.BUILDING:
+	if not active:
 		return
 	if camera == null or not is_instance_valid(camera):
 		camera = get_viewport().get_camera_3d() as Camera3D
 		if camera == null:
 			return
+	var p := _ground_point()
+	if tool == Tool.ROAD:
+		_update_road_ghost(p)
+		return
 	if selected >= 0:
 		_ghost.visible = false
 		return
 	_ghost.visible = true
-	_update_ghost(_ground_point())
+	_update_ghost(p)
+
+
+## The road tool reuses the same preview node: before the second click it shows nothing, and
+## after it shows the segment that is about to be committed.
+func _update_road_ghost(p: Vector2) -> void:
+	if _road_a == null:
+		_ghost.visible = false
+		_reason = Validation.Reason.OK
+		return
+	_ghost.visible = true
+	var a: Vector2 = _road_a
+	var key := "road|%d|%d" % [int(round(a.x)), int(round(a.y))]
+	if p.distance_to(a) < 12.0:
+		_reason = Validation.Reason.OVERLAP
+	elif key != _ghost_key:
+		_ghost_key = key
+		_rebuild_road_ghost(a, p)
+		_reason = Validation.Reason.OK
+	_ghost.position = Vector3.ZERO
+	_ghost.rotation = Vector3.ZERO
+
+
+func _rebuild_road_ghost(a: Vector2, b: Vector2) -> void:
+	for k in _ghost.get_children():
+		(k as Node).free()
+	var ctx := ChunkCtx.new()
+	ctx.setup(7)
+	ctx.detail = true
+	BuildTemplates.build_road(ctx, a, b, 12.0)
+	for f in [ctx.streets, ctx.plates, ctx.props, ctx.emissive]:
+		if f.is_empty():
+			continue
+		var mi := MeshInstance3D.new()
+		mi.mesh = f.commit()
+		mi.material_overlay = _ghost_mat
+		_ghost.add_child(mi)

@@ -1,0 +1,74 @@
+{
+  "project": "SHANGHAI: OPEN WORLD",
+  "engine": "Godot 4.4.1",
+  "note": "角色契约，不是自治进程。本仓库没有常驻的 AI daemon：真正的编排者是驱动本仓库的编码智能体，它读取本清单决定用哪个角色的检查项验收自己的产出。把 'Agent' 实现成 8 个空目录只会制造无法运行的假象。",
+  "orchestrator": {
+    "name": "director",
+    "duty": ["拆任务", "定优先级", "验收门禁", "版本与分支"],
+    "priority_order": ["稳定运行", "核心玩法", "城市真实性", "创造自由度", "AI能力", "多人扩展", "性能优化", "内容扩充"],
+    "gate": "Pipeline/run.sh"
+  },
+  "roles": [
+    {
+      "name": "game_design",
+      "duty": "机制 / 任务 / 体验 / 数值",
+      "writes": ["Docs/GAME_DESIGN_UPDATE.md"],
+      "must_not": ["直接改代码"],
+      "accept": "每条设计都能落到一个可运行的验收命令"
+    },
+    {
+      "name": "engine",
+      "duty": "系统与算法实现（本仓库为 GDScript；UE5 映射见 KNOWN_ISSUES 第 1 条）",
+      "reads": ["Docs/PROJECT_STATUS.md", "Docs/KNOWN_ISSUES.md", "AI_Agents/manifest.json"],
+      "writes": ["src/"],
+      "accept": "Pipeline/run.sh 全绿，且新增能力有 --*-test 断言"
+    },
+    {
+      "name": "technical_artist",
+      "duty": "着色器 / 材质 / 光照 / LOD / 流式预算",
+      "writes": ["src/shaders/", "src/core/Assets.gd", "src/core/QualityPresets.gd"],
+      "accept": "截图基线可比对；画质档位切换不报错；chunk 构建不超门槛"
+    },
+    {
+      "name": "world_builder",
+      "duty": "路网 / 街区 / 地形 / 区划 / 地标",
+      "writes": ["src/city/"],
+      "accept": "--census 数字变化有解释；无跨 chunk 接缝；freed=0"
+    },
+    {
+      "name": "ai_systems",
+      "duty": "NPC 社会 / 交通 / 生成式内容接入",
+      "writes": ["src/npc/", "src/vehicle/", "src/creation/"],
+      "accept": "生成内容必须过 Validation.check，不得绕过门禁直改世界"
+    },
+    {
+      "name": "qa",
+      "duty": "把缺陷变成可重跑的断言",
+      "writes": ["Bugs/", "src/GameRoot.gd 的 --*-test 段"],
+      "accept": "每个 BUG ID 有复现命令；修好后断言转绿且不再回退"
+    },
+    {
+      "name": "optimization",
+      "duty": "分相计时 / 内存 / 流式",
+      "reads": ["Pipeline/logs/"],
+      "writes": ["Pipeline/gates.sh"],
+      "accept": "只接受有前后对比数字的改动；无法证明改善的优化要回退"
+    },
+    {
+      "name": "reviewer",
+      "duty": "静态审查与规范一致性",
+      "writes": ["Pipeline/review.sh"],
+      "accept": "每条规则都能指认它在本项目实际拦住过的那次错误"
+    }
+  ],
+  "message_schema": "AI_Agents/schema/agent_message.json",
+  "message_validator": "Pipeline/check_msg.sh",
+  "gates": {
+    "parse": "godot --headless --editor --quit",
+    "boot": "godot --headless --quit-after 60",
+    "features": ["--create-test", "--validate-test"],
+    "world": ["--census"],
+    "perf": ["--bench-load", "--bench-stress=1000"],
+    "static": "Pipeline/review.sh"
+  }
+}

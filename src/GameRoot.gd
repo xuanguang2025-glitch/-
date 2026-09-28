@@ -19,6 +19,11 @@ const SPAWN := Vector3(1150.0, 0.6, 300.0)
 const SPAWN_YAW := -PI * 0.5
 
 var _report: Array[String] = []
+var _want_validate := false
+var _want_stress := 0
+var _want_load := false
+var _boot_us := 0
+var _load_reported := false
 var _shot_dir: String = ""
 var _shot_every: float = 6.0
 var _shot_left: int = 0
@@ -48,6 +53,15 @@ func _read_cli() -> void:
 			_census()
 		elif a == "--create-test":
 			_create_test()
+		elif a == "--validate-test":
+			# Needs streamed chunks to answer "is a generated building already here", so it
+			# waits for the world instead of running at boot.
+			_want_validate = true
+		elif a.begins_with("--bench-stress="):
+			_want_stress = int(a.trim_prefix("--bench-stress="))
+		elif a == "--bench-load":
+			_want_load = true
+			_boot_us = Time.get_ticks_usec()
 		elif a.begins_with("--demo-build="):
 			# Places a row of player-built objects in front of the camera and enters the
 			# editor, so one screenshot covers the generators, the toolbar and the ghost.
@@ -184,6 +198,7 @@ func _ready() -> void:
 
 	creation = CreationSystem.new()
 	creation.name = "CreationSystem"
+	creation.streamer = streamer
 	add_child(creation)
 
 	GameGlobals.advance_time(0.0)
@@ -195,6 +210,173 @@ func _ready() -> void:
 	_report.append("spawn=%s" % str(spawn))
 	print("=== boot ok: %s ===" % " | ".join(_report))
 	_read_cli()
+
+
+## Exercises every refusal the validator can give, using real geography rather than mocks,
+## then the two-click road tool. Run with --validate-test (needs streamed chunks).
+func _validate_test() -> void:
+	print("=== validation self-test (chunks=%d) ===" % streamer.stats()["alive"])
+	creation.clear_all()
+	var half := 20.0
+
+	_check("off-map refused", Validation.check(Vector2(7000, 0), half, [], streamer),
+		Validation.Reason.OFF_MAP)
+	var ridx := int(CityData.huangpu_xz.size() * 0.45)
+	var rp: Vector2 = CityData.huangpu_xz[ridx]
+	_check("river refused", Validation.check(rp, half, [], streamer), Validation.Reason.WATER)
+	# Step out from the channel centre by its own half-width plus the middle of the bank
+	# band: the Huangpu is ~456 m across here, so a fixed offset stays inside the water.
+	var bank := rp + Vector2(CityData.huangpu_hw[ridx]
+		+ (Validation.MARGIN_WATER + Validation.MARGIN_BANK) * 0.5, 0)
+	_check("mud bank refused", Validation.check(bank, half, [], streamer),
+		Validation.Reason.BANK)
+	_check("park refused", Validation.check(Vector2(620, 620), half, [], streamer),
+		Validation.Reason.PARK)
+	_check("boulevard refused", Validation.check(Vector2(0, -360), half, [], streamer),
+		Validation.Reason.MAJOR_ROAD)
+
+	var occupied := Vector2.INF
+	for i in 600:
+		for j in 600:
+			var p := Vector2(-4000.0 + float(i) * 15.0, -4000.0 + float(j) * 15.0)
+			if streamer.is_occupied(p):
+				occupied = p
+				break
+		if occupied != Vector2.INF:
+			break
+	_check("found an occupied spot", occupied != Vector2.INF, true)
+	_check("generated building refused", Validation.check(occupied, half, [], streamer),
+		Validation.Reason.GENERATED_BUILDING)
+
+	var free := Vector2.INF
+	for i in 900:
+		for j in 900:
+			var p := Vector2(-4500.0 + float(i) * 11.0, -4500.0 + float(j) * 11.0)
+			if Validation.check(p, half, [], streamer) == Validation.Reason.OK:
+				free = p
+				break
+		if free != Vector2.INF:
+			break
+	_check("found a buildable spot", free != Vector2.INF, true)
+	_check("empty spot allowed", Validation.check(free, half, [], streamer),
+		Validation.Reason.OK)
+	creation.tpl_i = 0
+	var id := creation.place(free)
+	_check("place at allowed spot", id >= 0, true)
+	_check("same spot now overlaps", Validation.check(free, half, [free], streamer),
+		Validation.Reason.OVERLAP)
+	_check("re-place refused", creation.place(free), -1)
+	_check("refusal created nothing", creation.objects.size(), 1)
+
+	# Road tool: two clicks, then undo, then persistence of both endpoints. Start from an
+	# empty field so the corridor probe and road_click judge the same near-list.
+	creation.clear_all()
+	creation.tool = CreationSystem.Tool.ROAD
+	var ra := Vector2.INF
+	var rb := Vector2.INF
+	for i in 900:
+		if rb != Vector2.INF:
+			break
+		for j in 900:
+			var p := Vector2(-4500.0 + float(i) * 13.0, -4500.0 + float(j) * 13.0)
+			if Validation.check(p, 30.0, [], streamer) != Validation.Reason.OK:
+				continue
+			if ra == Vector2.INF:
+				ra = p
+			elif p.distance_to(ra) > 90.0 and p.distance_to(ra) < 160.0 \
+					and Validation.check((ra + p) * 0.5, p.distance_to(ra) * 0.5, [],
+						streamer) == Validation.Reason.OK:
+				rb = p
+				break
+	_check("found a road corridor", rb != Vector2.INF, true)
+	_check("first click only anchors", creation.road_click(ra), -1)
+	_check("anchor pending", creation._road_a != null, true)
+	var rid := creation.road_click(rb)
+	_check("second click commits road", rid >= 0, true)
+	_check("road stored with both ends",
+		is_equal_approx(float(creation.objects[rid]["x2"]), rb.x), true)
+	var rnode: Node3D = creation.nodes[rid]
+	var road_tris := 0
+	for mi in rnode.get_children():
+		if mi is MeshInstance3D:
+			road_tris += (mi as MeshInstance3D).mesh.surface_get_array_len(0)
+	_check("road emitted geometry", road_tris > 100, true)
+	_check("road counted", creation.objects.size(), 1)
+	creation.undo()
+	_check("road undone", creation.objects.size(), 0)
+	creation.redo()
+	_check("road redone", creation.objects.size(), 1)
+	_check("road save", creation.save_edits(), true)
+	creation.clear_all()
+	_check("road reload", creation.load_edits(), 1)
+	_check("road endpoints survived",
+		String(creation.objects[rid]["tpl"]), "road")
+
+	creation.clear_all()
+	if FileAccess.file_exists(CreationSystem.SAVE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(CreationSystem.SAVE_PATH))
+	print("=== validation self-test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL",
+		_fails])
+
+
+## n validator-approved spots, spaced so a test can place them without self-overlap. The
+## tests ask the world where they may build instead of hardcoding coordinates, which is what
+## let a hardcoded grid silently drift into the river once the geography was recalibrated.
+func _find_spots(n: int, half: float) -> Array:
+	var out: Array = []
+	for i in 320:
+		if out.size() >= n:
+			break
+		for j in 320:
+			var p := Vector2(-4500.0 + float(i) * 13.0, -4500.0 + float(j) * 13.0)
+			var far := true
+			for q in out:
+				if p.distance_to(q) < half * 3.5:
+					far = false
+					break
+			if not far:
+				continue
+			if Validation.check(p, half, out, streamer) == Validation.Reason.OK:
+				out.append(p)
+				break
+	return out
+
+
+## Phase 37 test 3: build the maximum the editor can take and report what it cost. This is a
+## measurement, not an assertion of a number we made up - the gate lives in run.sh so the
+## threshold is visible in one place instead of buried in test code.
+func _stress_test(n: int) -> void:
+	print("=== build stress: %d objects ===" % n)
+	creation.clear_all()
+	var half := 12.0
+	var placed := 0
+	var t0 := Time.get_ticks_usec()
+	var scanned := 0
+	var i := 0
+	while placed < n and i < 900:
+		for j in 900:
+			if placed >= n:
+				break
+			var p := Vector2(-5800.0 + float(i) * 14.0, -5800.0 + float(j) * 14.0)
+			scanned += 1
+			if Validation.check(p, half, [], streamer) != Validation.Reason.OK:
+				continue
+			creation.tpl_i = placed % BuildTemplates.count()
+			creation.obj_scale = 0.5
+			if creation.place(p) >= 0:
+				placed += 1
+		i += 1
+	var ms := float(Time.get_ticks_usec() - t0) / 1000.0
+	var mem := float(Performance.get_monitor(Performance.MEMORY_STATIC)) / 1048576.0
+	print(("[stress] placed=%d/%d scanned=%d time=%.0fms per_object=%.2fms static_mem=%.1fMB " +
+		"nodes=%d") % [placed, n, scanned, ms, ms / maxf(float(placed), 1.0), mem,
+			creation.nodes.size()])
+	var t1 := Time.get_ticks_usec()
+	creation.clear_all()
+	print("[stress] teardown %d objects in %.0f ms" % [placed,
+		float(Time.get_ticks_usec() - t1) / 1000.0])
+	print("[stress] result=%s (placed>=90%% requested: %s)" % [
+		"PASS" if placed >= int(n * 0.9) else "FAIL", str(placed >= int(n * 0.9))])
 
 
 ## End-to-end exercise of the creation stack: place, edit, undo, redo, delete, save, reload.
@@ -218,9 +400,11 @@ func _create_test() -> void:
 	_check("start empty", creation.objects.size(), 0)
 
 	creation.tpl_i = 0
+	var spots := _find_spots(5, 30.0)
+	_check("found 5 buildable spots", spots.size(), 5)
 	var ids: Array = []
-	for i in 5:
-		ids.append(creation.place(Vector2(200.0 * float(i), 640.0)))
+	for sp in spots:
+		ids.append(creation.place(sp))
 	_check("placed 5 objects", creation.objects.size(), 5)
 	_check("5 scene nodes", creation.nodes.size(), 5)
 	_check("undo depth", creation._undo.size(), 5)
@@ -338,6 +522,23 @@ func _find_spawn(ideal: Vector2) -> Vector2:
 
 
 func _process(delta: float) -> void:
+	if _want_validate and streamer.stats()["alive"] > 250:
+		_want_validate = false
+		_validate_test()
+		get_tree().quit()
+	if _want_stress > 0 and streamer.stats()["alive"] > 250:
+		var n := _want_stress
+		_want_stress = 0
+		_stress_test(n)
+		get_tree().quit()
+	if _want_load and not _load_reported:
+		var st: Dictionary = streamer.stats()
+		if st["wanted"] > 0 and st["alive"] >= st["wanted"]:
+			_load_reported = true
+			var ms := float(Time.get_ticks_usec() - _boot_us) / 1000.0
+			print("[bench] streamed %d/%d chunks in %.0f ms (gate: 30000 ms) -> %s" % [
+				st["alive"], st["wanted"], ms, "PASS" if ms < 30000.0 else "FAIL"])
+			get_tree().quit()
 	if _shot_left > 0:
 		_shot_t += delta
 		if _shot_t >= _shot_every:

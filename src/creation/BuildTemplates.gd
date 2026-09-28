@@ -106,3 +106,57 @@ static func build(ctx: ChunkCtx, tpl: Dictionary, quad: PackedVector2Array, r: f
 			CellProgram.site(ctx, quad, tint, h, r)
 		_:
 			CellProgram.tower(ctx, quad, tint, h, r)
+
+
+# --- Player-built road ------------------------------------------------------
+## A straight segment with carriageway, centre dashes, kerbed sidewalks and street lamps,
+## assembled from the same MeshFusion primitives the avenue builder uses.
+static func build_road(ctx: ChunkCtx, a: Vector2, b: Vector2, w: float) -> void:
+	var pts := PackedVector2Array([a, b])
+	var arcs := MeshFusion.arc_lengths(pts)
+	var dir := (b - a).normalized()
+	var nrm := Vector2(-dir.y, dir.x)
+	var asphalt := Color(0.0, 0.0, 0.0)
+	asphalt.a = CellProgram.CODE_GROUND
+	ctx.streets.ribbon(pts, w * 0.5, 0.06, 0.06, asphalt, arcs)
+
+	var white := Color(0.78, 0.77, 0.72)
+	white.a = CellProgram.CODE_GROUND
+	var l := a.distance_to(b)
+	var n := int(l / 9.0)
+	for k in n:
+		if k % 2 == 1:
+			continue
+		var seg := PackedVector2Array([
+			a + dir * (float(k) / float(n) * l),
+			a + dir * ((float(k) + 0.62) / float(n) * l)])
+		ctx.streets.ribbon(seg, 0.09, 0.075, 0.075, white, MeshFusion.arc_lengths(seg))
+
+	var pave := Color(0.42, 0.41, 0.40)
+	pave.a = CellProgram.CODE_PAVE
+	var kerb := Color(0.52, 0.51, 0.50)
+	kerb.a = CellProgram.CODE_CONC
+	for side_v in [-1.0, 1.0]:
+		var side: float = side_v
+		var off: Vector2 = nrm * (w * 0.5 + 1.7) * side
+		ctx.plates.ribbon(PackedVector2Array([a + off, b + off]), 1.7, 0.05, 0.05,
+			pave, arcs)
+		var edge: Vector2 = nrm * (w * 0.5 + 0.15) * side
+		ctx.props.skirt(PackedVector2Array([a + edge, b + edge]), 0.15, 0.16, 0.0,
+			kerb, arcs, int(side))
+
+	var steel := Color(0.30, 0.31, 0.33)
+	steel.a = CellProgram.CODE_CONC
+	var lamps := clampi(int(l / 34.0), 1, 40)
+	for k in lamps:
+		var t := (float(k) + 0.5) / float(lamps)
+		var side := 1.0 if k % 2 == 0 else -1.0
+		var p := a.lerp(b, t) + nrm * (w * 0.5 + 3.2) * side
+		var xf := Transform3D(Basis.IDENTITY, Vector3(p.x, 0.0, p.y))
+		ctx.props.cylinder(xf, 0.16, 0.10, 8.4, steel, 6, false)
+		var arm := nrm * 1.5 * side
+		var mid := Vector3(p.x + arm.x * 0.5, 8.2, p.y + arm.y * 0.5)
+		ctx.props.box(Transform3D(Basis.IDENTITY, mid),
+			Vector3(absf(arm.x) + 0.25, 0.16, absf(arm.y) + 0.25), steel)
+		ctx.emissive.box(Transform3D(Basis.IDENTITY, Vector3(p.x + arm.x, 7.85, p.y + arm.y)),
+			Vector3(0.95, 0.30, 0.42), Color(1.0, 0.84, 0.60))

@@ -149,7 +149,25 @@ func _build(c: Vector2i, ring: int, detail: bool) -> void:
 
 	if ring <= collide_ring:
 		_collide(node, ctx)
-	_alive[c] = {"node": node, "ring": ring, "tris": ctx.totals()}
+	_alive[c] = {"node": node, "ring": ring, "tris": ctx.totals(), "ctx": ctx}
+
+
+## True where the generated city already has a building. Answers from the occupancy bitmap
+## each chunk writes while emitting, so the creation tools and any AI generator get the same
+## answer without walking every tower. Unloaded ground reports false: nothing blocks it yet.
+func is_occupied(p: Vector2) -> bool:
+	var c := CityData.chunk_of(p)
+	var e: Dictionary = _alive.get(c, {})
+	if e.is_empty():
+		return false
+	var ctx: ChunkCtx = e["ctx"]
+	if ctx.ground_n == 0 or ctx.occupied.is_empty():
+		return false
+	var i := int(floor((p.x - ctx.ground_min.x) / ctx.ground_step))
+	var j := int(floor((p.y - ctx.ground_min.y) / ctx.ground_step))
+	if i < 0 or j < 0 or i >= ctx.ground_n or j >= ctx.ground_n:
+		return false
+	return ctx.occupied[j * ctx.ground_n + i] != 0
 
 
 func _instance(parent: Node, fusion: MeshFusion, mat: Material, _y: float) -> MeshInstance3D:

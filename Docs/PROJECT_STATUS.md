@@ -19,9 +19,12 @@
 | P5 | 昼夜循环 | 已实现 | 12:24 / 19:18 / 20:30 三组截图 |
 | P5 | 天气（雨/雾/台风） | 部分实现 | GPUParticles3D 降水+拖尾已接，未做车窗雨滴/路面积水 |
 | P6 | 创造系统：放置/移动/旋转/缩放/复制/删除/撤销/重做/存盘/读盘 | 已实现 | `--create-test` 22 项断言全通过 |
-| P6 | 创造工具：建筑（12 种模板） | 已实现 | 截图可见玩家作品与生成城市同轴同材质渲染 |
-| P6 | 创造工具：道路 / 地形 / 装饰 / 车辆 / NPC / 任务 | 待实现 | 按键 2-7 有占位提示，未接入 |
+| P6 | 创造工具：建筑（12 种模板）+ 道路（两点成段） | 已实现 | `--validate-test` 24 项断言全通过 |
+| P6 | 放置合法性校验（越界/水面/滩地/公园/干道/已有建筑/作品重叠） | 已实现 | 七类理由各有独立断言；`Validation.check` 为唯一入口 |
+| P6 | 创造工具：地形 / 装饰 / 车辆 / NPC / 任务 | 待实现 | 按键 3-7 有占位提示，未接入 |
+| P6 | 3D 拖拽 Gizmo | 待实现 | 改用键盘变换 |
 | P6 | 大地图 / 主菜单 | 待实现 | 仅调试 HUD 已实现 |
+| P31-43 | AI 协作流水线（角色契约 / 交接协议 / 门禁 / 看板 / 缺陷台账 / CI） | 已实现 | `Pipeline/run.sh`；`Pipeline/check_msg.sh` 正反例均校验通过 |
 | P7 | 性能 | 部分实现 | 单 chunk 构建 46.5→17.3 ms；仍超 7 ms 预算，见 KNOWN_ISSUES 第 3 条 |
 | P9 | 地标 | 已实现 | 23 点位，陆家嘴四件套 + 外滩 + 4 桥，含夜景发光签名 |
 
@@ -84,7 +87,15 @@ GODOT="/d/徐浩然/2026-08-29-21-56-21/.tools/Godot441_console.exe"
 # 其他开关：--weather=<0..6>  --quality=<0..3>
 "$GODOT" --path . --resolution 1280x720 -- "--shots=2" "--shot-every=11" \
     "--shot-dir=<abs>" "--time=10.0" "--spawn=1150,300"     # 截图 + 分相计时
-# 其他开关：--weather=<0..6>  --quality=<0..3>  --view=<pitch,yaw,lift>
+# 其他开关：--weather=<0..6>  --quality=<0..3>  --view=<pitch,yaw,lift>  --demo-build=<n>
+#          --validate-test（需已流式到位的 chunk，窗口模式）
+#          --bench-load  --bench-stress=<n>
+
+# 一条命令跑完全部门禁（解析→启动→自测→普查→性能与压力→静态审查→生成看板）
+bash Pipeline/run.sh
+bash Pipeline/review.sh                       # 只跑静态审查（6 条规则）
+bash Pipeline/check_msg.sh <handoff.json>     # 校验 AI 交接消息
+# 数值门槛集中在 Pipeline/gates.sh；看板由日志生成于 Docs/PROJECT_DASHBOARD.md
 ```
 
 控制：WASD 移动 / Shift 疾跑 / 空格 跳跃 / C 视角 / F 上下车 / B 建造 / V 天气 / T 时间 / P 画质 / F1 帮助

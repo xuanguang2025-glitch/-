@@ -136,6 +136,7 @@ static func build_cell(ctx: ChunkCtx, i: int, j: int, build: bool = true) -> voi
 	ctx.paint_plate(quad, f.plate)
 	if not build:
 		return
+	ctx.mark_occupied(quad, 12.0)
 
 	var fr := frame_of(quad)
 	var tint := Assets.tint_for(style, r2)

@@ -673,8 +673,15 @@ func _poly_distance(path: PackedVector2Array, p: Vector2) -> float:
 	return best
 
 
+## Landmarks that can touch this chunk. Returns a shared empty array rather than a fresh
+## literal so no caller, hot or cold, allocates on a miss.
+const NO_LANDMARKS: Array = []
+
+
 func landmarks_in(chunk: Vector2i) -> Array:
-	return landmark_cells.get(chunk, [])
+	if not landmark_cells.has(chunk):
+		return NO_LANDMARKS
+	return landmark_cells[chunk]
 
 
 ## Roads that can touch this chunk, expanded to world space.

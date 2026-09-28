@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Blocks direct pushes to main (Part 6 Phase 34). Local guard only; the remote branch
+# protection is what actually enforces it.
+set -uo pipefail
+BLOCK=0
+while read -r _ref dst_sha dst_ref; do
+  case "$dst_ref" in
+    refs/heads/main)
+      echo "拒绝：禁止直接推送到 main。请走 feature -> develop -> main（见 Docs/BRANCH_POLICY.md）"
+      BLOCK=1 ;;
+  esac
+done
+exit $BLOCK

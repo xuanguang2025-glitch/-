@@ -76,10 +76,15 @@ func feed(delta: float, s: Dictionary) -> void:
 			OccupationTable.label(prof.occ), prof.state_label(), prof.feeling()])
 	var cr: Dictionary = s.get("creation", {})
 	if bool(cr.get("active", false)):
+		var tools := ["建筑", "道路", "地形", "装饰", "车辆", "NPC", "任务"]
+		var tn: String = tools[clampi(int(cr["tool"]), 0, 6)]
 		lines.append("")
-		lines.append("创造模式 · 工具 %d 建筑   模板 %s" % [int(cr["tool"]) + 1, cr["tpl"]])
+		lines.append("创造模式 · 工具 %s   模板 %s" % [tn, cr["tpl"]])
 		lines.append("作品 %d   选中 #%d   撤销栈 %d/%d" % [cr["objects"], cr["selected"],
 			cr["undo"], cr["redo"]])
+		var ok: bool = bool(cr.get("ok", true))
+		lines.append("校验：%s%s" % [cr["reason"], "" if ok else "  ← 此处不可建造"] +
+			("   (起点已定)" if bool(cr.get("road_pending", false)) else ""))
 		lines.append("1建筑 2道路 3地形 4装饰 5车辆 6NPC 7任务")
 	if s["drive"]:
 		lines.append("")

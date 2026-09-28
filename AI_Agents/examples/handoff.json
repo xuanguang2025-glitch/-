@@ -1,0 +1,27 @@
+{
+  "agent": "engine",
+  "task": "Phase 19.9 道路创造工具 + Phase 21.6 放置合法性校验",
+  "status": "done",
+  "result": "success",
+  "evidence": {
+    "commands": [
+      "godot --headless --path . --quit-after 150 -- --create-test",
+      "godot --path . -- --validate-test --spawn=1150,300",
+      "Pipeline/run.sh"
+    ],
+    "assertions": "46/46 PASS",
+    "files": [
+      "src/creation/Validation.gd",
+      "src/creation/BuildTemplates.gd",
+      "src/creation/CreationSystem.gd",
+      "src/city/ChunkCtx.gd",
+      "src/city/WorldStreamer.gd"
+    ],
+    "metrics": { "chunk_build_ms": 17.9, "stress_objects_placed": 1000 }
+  },
+  "unknowns": [
+    "BUG-002 单 chunk 构建 17.9 ms 仍超 7 ms 帧预算",
+    "BUG-004 桥 underside 可见车道标线",
+    "BUG-008 玩家作品不参与流式卸载"
+  ]
+}

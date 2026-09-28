@@ -2,3 +2,4 @@ shots/
 .godot/
 *.tmp
 extension_api.json
+Pipeline/logs/
