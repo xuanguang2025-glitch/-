@@ -52,12 +52,13 @@ var _road_a: Variant = null
 var sim: CitySim
 var crowd: CrowdSystem
 var _business := BusinessRegistry.new()
+var _mp_client: MultiplayerClient = null
+var _mp_bridge := MultiplayerCreationBridge.new()
 
 var _todo_tools := {
 	Tool.TERRAIN: "地形工具",
 	Tool.VEHICLE: "车辆工具", Tool.QUEST: "任务工具",
 }
-
 
 func _ready() -> void:
 	add_to_group("creation")
@@ -78,7 +79,7 @@ func _ready() -> void:
 	_ghost_mat.no_depth_test = true
 	sim = get_tree().get_first_node_in_group("sim")
 	load_edits()
-
+	_mp_bridge.call_deferred("bind", self)
 
 func toggle() -> void:
 	set_active(not active)
@@ -116,23 +117,18 @@ func _tpl() -> Dictionary:
 ## control lie about what would appear would make the ghost disagree with the built object.
 func _tpl_scaled(sc: float) -> Dictionary:
 	var t: Dictionary = _tpl().duplicate()
-	if _no_scale(t):
+	var k := String(t["kind"])
+	if k == "prop" or k == "npc":
 		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
 	return t
 
 
-## Street furniture and people are placed at their true metric size: a bench that stretches to
-## three metres is not a thing a street needs, and neither is a person.
-static func _no_scale(t: Dictionary) -> bool:
-	var k := String(t["kind"])
-	return k == "prop" or k == "npc"
-
-
 func _tpl_of(id: String, sc: float) -> Dictionary:
 	var t: Dictionary = BuildTemplates.find(id).duplicate()
-	if _no_scale(t):
+	var k2 := String(t["kind"])
+	if k2 == "prop" or k2 == "npc":
 		return t
 	t["size"] = Vector2(t["size"]) * sc
 	t["height"] = float(t["height"]) * sc
@@ -233,29 +229,33 @@ func _snap(p: Vector2) -> Vector2:
 
 
 ## The only entry point for new world content, so a player click and an AI generator cannot
-## take different paths past the validator.
+## take different paths past the validator. In multiplayer mode the placement is a *request*
+## to the authoritative server; the local object only materialises when the server confirms it.
+## A ghost still appears immediately for feedback, but the ledger, the budget and the undo stack
+## do not move until confirmation — otherwise a rejected request would leave phantom entries.
 func place(c: Vector2) -> int:
 	_reason = _validate(c)
 	if _reason != Validation.Reason.OK:
 		GameGlobals.say("不能建造：%s" % Validation.label(_reason))
 		return -1
+	var t := _tpl()
+	if _mp_client == null:
+		_mp_client = get_tree().get_first_node_in_group("multiplayer")
+	if _mp_client != null and not _mp_client.session_id.is_empty():
+		return _mp_bridge.request_place(_mp_client, t, c, yaw, obj_scale)
 	var id := next_id
 	next_id += 1
-	var t := _tpl()
 	var st := {"id": id, "tpl": String(t["id"]), "x": c.x, "z": c.y,
 		"yaw": yaw, "scale": obj_scale}
 	if String(t["kind"]) == "npc":
-		# The identity travels with the record, so a reload recreates the same person rather
-		# than a random stranger standing at the same coordinate.
 		st["name"] = String(t["name"])
 		st["occ"] = int(t["occ"])
-	# Through _put, not around it: that is where the economy learns that a business exists, and
-	# a second insertion path would let a click place something the ledger never sees.
 	_put(st)
 	_undo.append({"op": "add", "obj": st.duplicate()})
 	_redo.clear()
 	changed.emit()
 	return id
+
 
 
 ## Two clicks lay a segment: the first anchors it, the second commits. A preview line is kept

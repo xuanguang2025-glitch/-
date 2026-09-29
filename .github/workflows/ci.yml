@@ -83,6 +83,12 @@ jobs:
           sudo apt-get update && sudo apt-get install -y curl
           bash Pipeline/backend_sync.sh
 
+      # The Node-side contract test shares its encoder with the server, so it cannot see a
+      # cross-language seam break; this step boots the real GDScript client against the real
+      # server and is the only thing that would have caught BUG-023.
+      - name: 真实客户端-游戏服务器互通（多人接缝）
+        run: bash Pipeline/mp_probe.sh
+
       - name: 世界普查
         run: |
           "$GODOT" --headless --path . --quit-after 60 -- --census 2>&1 | grep -E "^\[census\]|^\[pop\]"

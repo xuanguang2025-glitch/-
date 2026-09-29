@@ -5,6 +5,22 @@
 ## Unreleased
 
 ### Added
+- **多人在线基础架构（Part 10 第一段）**：从单机升级到持久多人世界的最小可验证闭环。
+  - `server/game_server.mjs`：权威游戏服务器，30 Hz tick，TCP + `[4B 长度][UTF-8 JSON]` 帧协议，
+    会话管理（用与网关同一个 store 反查 session token），兴趣裁剪（chunk 网格），断线 grace
+    period，世界状态持久化。
+  - `src/net/SyncProtocol.gd` + `src/net/MultiplayerClient.gd`：客户端同步层，两端消息表逐条对齐，
+    creation request→confirm 流程，断线 grace 重连（`C2S_RECONNECT` 带 session id）。
+  - `S2C_SELF_STATE`：服务器每 tick 回发"我认为你在哪"，客户端据此把**未授权位移**回弹。对账规则
+    是位移上界而不是绝对位置——站在原地误差恒为 0，否则任何网络抖动都会和动画打架。
+  - `src/creation/MultiplayerCreationBridge.gd`：创造系统与多人层的接缝，服务端确认后才落本地。
+  - `server/multiplayer_test.mjs`：21 条双人端到端契约断言——握手、移动同步、SELF_STATE 帧形状、
+    建筑同步、河里拒绝、所有权保护、断线重连、快照恢复。
+  - `Pipeline/mp_probe.sh` + `src/net/MultiplayerProbe.gd`：**真实 Godot 客户端**对真实服务器的
+    8 条端到端断言（握手 / 空闲不回弹 / 240 m 瞬移被回弹到 <1 m / 合法放置被接受 /
+    河里放置被拒绝），并输出 rx/tx 帧数与字节实测值。
+  - `Pipeline/run.sh` 第 10 步门禁：先跑 Node 契约，再跑真实客户端探针，任一失败即整体失败。
+  - `Pipeline/review.sh` R8：两端消息 id 表逐条 diff（已用植入不一致做正反例回归）。
 - **创作分区（Phase 163 / 161）** `src/creation/CreationZones.gd`：权限由城市自身派生——建成度
   加地标距离，而不是手写坐标表。四档（官方核心 / 公共建设 / 社区创作 / 个人创作）各自给出
   体量上限与地形改动上限，`Validation` 是唯一出口，因此 AI 规划器与手点走同一道门。
@@ -72,6 +88,15 @@
   导致整座城市按离原点距离成比例渲染位移（碰撞却正确）。玩家走在看不见的街道上。
 - **BUG-007**：`in_water` 走 25 m 量化格，岸边判定可错 25 m，曾使出生点落进黄浦江。
 - **BUG-001**：分相计时器按阶段累加样本数，所有每-chunk 均值被低估 4 倍。
+- **BUG-023**：客户端与服务器**从未连通**。客户端走 ENet + `var_to_bytes`，服务器走 TCP + msgpack，
+  而"端到端测试"的客户端是用服务器自己的编解码写的 Node 脚本——21 条断言与整条流水线全绿，
+  结论却建立在从未被连接过的路径上，`SyncProtocol.gd` 的注释还把 msgpack 说成"两端原生支持"。
+  统一到 TCP + JSON，并补上真实客户端探针（`Pipeline/mp_probe.sh`）与两端消息表 diff（R8）。
+- **BUG-024**：`PackedByteArray` 先 `resize(4+n)` 写长度头再 `append_array(payload)`，长度头后面
+  是 n 个零字节，服务器解出的整帧都是 NUL。Godot 4.4 也没有 `set_bytes()` 和大端
+  `encode_32_be()`，长度头只能逐字节写。
+- **BUG-025**：TCP 被拒时 `get_status()` 返回 `STATUS_NONE` 而非 `STATUS_ERROR`，而客户端只把 ERROR
+  当作连接死亡，端口不通于是表现为静默等满 10 秒且不给任何原因。
 - 启动期两条 GPU 粒子报错（`trail_lifetime` < 0.01 与晴天下 `amount` < 1）。
 - `_poly_has` 在退化边上的除数符号错误。
 - 门禁自身的 `tr` 参数错误导致性能门禁**空通过**（解析成 0 ms 去比 25 ms 上限）。
@@ -97,6 +122,8 @@
   门禁自身的已知弱点）。
 
 ### Removed
+- 游戏服务器的 `@msgpack/msgpack` 依赖，连带 `package.json` / `package-lock.json` /
+  `node_modules/`：换成两端原生支持的 JSON 之后，"零依赖 Node 后端"这句话才第一次是真的。
 - `Lattice.cell_at` 及其缓存（地面着色反转后无人调用）。
 - 两处为优化而加、但无法用截图证明效果的几何：远景 50 m 地面网格、桥面底板（见 BUG-004）。
 

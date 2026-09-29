@@ -27,6 +27,9 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-020 | 商铺登记若采用"每次存放后全表重算"，1000 件压力测试退化为 O(n²) | green | 改为按对象登记/撤销（`_register`/`_unregister`）；`--bench-stress=1000` 的 `per_object` 与拆分前同量级 |
 | BUG-021 | 回滚接口先查版本链、后查"是否已是当前版本"，而当前版本不在链上——"回滚到已生效版本"返回误导性的 404 而不是 409 | green | `backend/test.mjs`：`回滚到当前版本被拒（不是空操作）` |
 | BUG-022 | 三角面预算总量若每次放置都全表求和，压力路径同样退化；且增量账本一旦漂移就无人发现 | green | `--create-test`：`增量预算与全表重算一致`（放置若干件后与逐件 recount 对比） |
+| BUG-023 | **跨语言接缝无人验证**：客户端 `MultiplayerClient.gd` 走 ENet + `var_to_bytes`，服务器 `game_server.mjs` 走 TCP + msgpack，两边各自自洽但永远连不上；而 `multiplayer_test.mjs` 的"客户端"是用服务器同一套编解码写的 Node 假客户端，所以 19 条断言与流水线全绿都建立在从未被连接过的路径上。`SyncProtocol.gd` 的注释还写着"msgpack 两端原生支持"（Godot 并不支持） | green | `Pipeline/mp_probe.sh`（真实 Godot 客户端 8 条断言）+ `review.sh` R8（两份消息表逐项对齐）。首条断言即"客户端与服务器完成握手" |
+| BUG-024 | `PackedByteArray` 先 `resize(4+n)` 写长度头、再 `append_array(payload)`，得到的是 `[长度头][n 个 0][payload]`：服务器按头部声明读到的是 n 个 NUL 字节，报 `decode error ... is not valid JSON`。Godot 4.4 的 `PackedByteArray` 既没有 `set_bytes()` 也没有大端 `encode_32_be()`，长度头只能逐字节写 | green | `mp_probe` 握手断言（帧错就收不到 WELCOME）+ `game_server.mjs` 的 `[gs] decode error` 日志；帧写入见 `MultiplayerClient._send` |
+| BUG-025 | TCP 被拒时 Godot 的 `get_status()` 返回 `STATUS_NONE`（不是 `STATUS_ERROR`），而 `_process` 只把 ERROR 当作死亡，NONE 被归入"仍在连接"，于是端口不通表现为静默等满 10 秒且无任何原因 | green | `MultiplayerClient._process` 同时处理 NONE/ERROR，并在 `stats()` 与探针里输出 `connect_err`/`status`；断言名 `服务器断开：socket dead (status=…)` |
 
 ## red 项的处理约定
 

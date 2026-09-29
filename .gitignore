@@ -4,3 +4,5 @@ shots/
 extension_api.json
 Pipeline/logs/
 backend/data/
+backend/data_test_mp/
+gdextension_interface.h

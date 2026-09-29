@@ -25,6 +25,9 @@ var _want_load := false
 var _want_sync := false
 var _want_sim := false
 var _want_soak := 0
+var _want_mp := false
+var _mp_host := "127.0.0.1"
+var _mp_port := 9876
 var sim: CitySim
 var _sim_hour := -1
 var _boot_us := 0
@@ -66,6 +69,13 @@ func _read_cli() -> void:
 			_want_sim = true
 		elif a.begins_with("--sim-soak="):
 			_want_soak = int(a.trim_prefix("--sim-soak="))
+		elif a == "--mp-probe":
+			_want_mp = true
+		elif a.begins_with("--mp-server="):
+			var hp := a.trim_prefix("--mp-server=").split(":")
+			if hp.size() == 2:
+				_mp_host = String(hp[0])
+				_mp_port = int(hp[1])
 		elif a == "--validate-test":
 			# Needs streamed chunks to answer "is a generated building already here", so it
 			# waits for the world instead of running at boot.
@@ -295,6 +305,23 @@ func _sync_test() -> void:
 		else:
 			_fails += 1
 	print("=== backend sync test: %s (%d failures) ===" % ["PASS" if _fails == 0 else "FAIL", _fails])
+
+
+## The one place the shipping client is pointed at a shipping server. The token comes from the same
+## backend session the save path uses, so this exercises the real trust chain: gateway issues a
+## session, game server looks it up, and only then does the player exist in the world.
+func _mp_probe() -> void:
+	if creation.backend == null or creation.backend.token.is_empty():
+		print("[mp] FAIL  未获得后端 session token（需要 --backend=<url>）")
+		_fails += 1
+		return
+	var mp := MultiplayerClient.new()
+	mp.name = "MultiplayerClient"
+	mp.configure(creation.backend.token, _mp_host, _mp_port)
+	add_child(mp)
+	# The group CreationSystem resolves when it decides whether to place locally or ask the server.
+	mp.add_to_group("multiplayer")
+	_fails += await MultiplayerProbe.run(get_tree(), mp, player)
 
 
 ## The simulation's own acceptance contract lives in SimTests; these are the CLI entry points,
@@ -723,6 +750,12 @@ func _process(delta: float) -> void:
 		var h := _want_soak
 		_want_soak = 0
 		_sim_soak(h)
+		get_tree().quit()
+	if _want_mp and streamer.stats()["alive"] > 0:
+		# Gate on any geometry rather than the whole city: the probe tests the wire, and waiting for
+		# 289 chunks to build would add ten seconds of unrelated work to every pipeline run.
+		_want_mp = false
+		await _mp_probe()
 		get_tree().quit()
 	if _want_stress > 0 and streamer.stats()["alive"] > 250:
 		var n := _want_stress

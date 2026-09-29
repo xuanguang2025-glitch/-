@@ -62,20 +62,43 @@
 | 创作权限由城市自身派生，不是手写坐标表 | `CreationZones.zone_at`（建成度 + 地标距离） | `--validate-test` 同一坐标"小体量放行 / 大体量被拒" |
 | 分区上限必须真的拒绝东西 | `Validation.check` 的 `ZONE_SIZE` | `--validate-test`：`核心区大体量被分区拒绝` |
 | 构件按真实公制尺寸放置，缩放对其不生效 | `BuildTemplates._tpl_of` 对 `kind=="prop"` 短路 | `--create-test`：`构件不参与缩放` |
+| 多人模式下放置是请求而非写入 | `CreationSystem.place()` → bridge → 服务端 confirm | `server/multiplayer_test.mjs`：B 收到 A 的建筑推送、B 不能删 A 的建筑 |
+| 断线重连恢复完整世界状态 | game_server grace period + snapshot | `server/multiplayer_test.mjs`：A 断开→B 放置→A 重连后快照含两人建筑 |
 
-## 2. 后端（`backend/`）
+## 2. 后端（`backend/`）+ 游戏服务器（`server/`）
 
-零依赖 Node 服务，实现 Part 7 中**可以在单机上被证伪**的那部分不变量：
+零依赖 Node 服务（无 `package.json`、无 `node_modules`，只用 `node:` 内建模块），实现 Part 7 中
+**可以在单机上被证伪**的那部分不变量，加上 Part 10 的权威世界 tick：
 
 ```
-Client ──HTTP──► backend/server.mjs
-                    ├─ 账号：scrypt 口令哈希、session/refresh 双令牌、refresh 单次轮换、TTL
-                    ├─ 存档：三代轮转 + sha256 校验 + 损坏自动回退 + 版本迁移下限
-                    ├─ 账本：append-only JSONL，余额是逐笔折叠结果（不是可改字段）+ 幂等键
-                    └─ UGC：扩展名黑名单 / 路径穿越 / 体积 / 性能预算 / 依赖存在性
-                       + 版本链（每版存真实字节）与回滚（被替换版本回到链上，可再回滚）
-                 └─ store.mjs  ← 换 Postgres/S3 的唯一接缝
+Client ──HTTP──► backend/server.mjs (Gateway)
+                    ├─ 账号 / 存档 / 账本 / UGC（同前）
+                    ├─ 签发 session_token：putSession(sha(token)) → {player_id, ttl}
+                    └─ store.mjs ← 换 Postgres/S3 的唯一接缝
+
+Client ──TCP + [4B 长度][UTF-8 JSON]──► server/game_server.mjs (Dedicated Server)
+                    ├─ 权威世界 tick (30 Hz)：玩家位置、时钟、复制
+                    ├─ 信任链：HELLO 的 token 用同一个 store 反查 session，查不到就踢
+                    ├─ 兴趣裁剪：chunk 网格，只同步视野内实体
+                    ├─ CreationCmd 校验 → 回写 → 流式推送
+                    ├─ 每 tick 回发 S2C_SELF_STATE：客户端据此回弹未授权位移
+                    ├─ 断线 grace period + snapshot 重连
+                    └─ 世界状态持久化
 ```
+
+**为什么线上格式是 JSON 而不是更"专业"的二进制**：Godot 没有 MessagePack，Node 侧不允许装依赖，
+两端能不加插件互解的交集只剩 JSON。这个选择的代价（每 tick 字节数、解析开销）由
+`MultiplayerClient` 的 `rx/tx_frames`、`rx/tx_bytes` 计量并在探针输出里报出实测值，不靠形容词。
+
+**多人必须有两条独立的证据链**（这是 BUG-023 的直接教训）：
+
+| 层 | 谁实现客户端 | 证明什么 | 命令 |
+|---|---|---|---|
+| 服务器契约 | Node 假客户端（复用服务器编解码） | 服务器的规则确实生效 | `node server/multiplayer_test.mjs`（21 条） |
+| 真实互通 | **游戏内的 `MultiplayerClient.gd`** |  shipped 客户端真能连上并按同一契约说话 | `bash Pipeline/mp_probe.sh`（8 条） |
+
+第一层单独存在时**永远发现不了跨语言接缝的断裂**——它和服务器共用同一个编解码。R8
+（`Pipeline/review.sh`）额外把两端的消息 id 表逐条对齐，作为第三道防线。
 
 **服务器权威的落点**（有断言守着）：
 - 存档请求里出现 `balance`/`money`/`level` → 400
@@ -83,6 +106,9 @@ Client ──HTTP──► backend/server.mjs
 - 上传 ≠ 发布：任一检查不过就是 `rejected`，不进 browse 列表
 - 新版本走同一个 `packageProblems`：把 `.gd` 作为"已通过包的第 2 版"上传同样被拒
 - 发布新版与回滚都仅限作者，且版本号必须前进；回滚恢复的是文件字节，不是只有元数据
+- 客户端把自己瞬移 240 m → 服务器回弹，落点与服务器位置偏差 < 1 m（`mp_probe` 断言）
+- 客户端站在原地 → **0 次回弹**。这条和上一条同等重要：只在客户端越界时才生效的规则才是权威，
+  每帧都拽一下的规则只是噪声，任何人都能写出后者
 
 ## 3. Part 7 要求但**尚未实现**的东西
 

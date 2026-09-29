@@ -28,6 +28,7 @@ STRESS_OBJECTS=1000       # Phase 37 test 3
 SIM_SOAK_HOURS=8760       # one simulated year, ~2.7 s of wall clock
 MAX_SIM_HOUR_MS=1.0
 MIN_SIM_ASSERTS=25        # dropping an assertion must fail the gate, not quietly raise the average
+MIN_MP_ASSERTS=8          # 10b: real Godot client against a live server, 8 checks scripted
 SIM_LIVE_MIN_HOURS=1      # a real session crossing an hour boundary must tick the economy
 BOOT_ERRORS_ALLOWED=0
 FILE_MAX_LINES=900

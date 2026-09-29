@@ -53,6 +53,24 @@ bad=$(awk '
   }' $(find "$SRC" -name '*.gd' -print) 2>/dev/null || true)
 if [ -n "$bad" ]; then hit "R7 _check 被当成 _check_that 使用" "$bad"; else note pass "R7 断言函数用法正确"; fi
 
+# R8  The message-id table is written twice, in two languages, and must agree digit-for-digit.
+#     A divergence is invisible to any test whose client reuses the server's own encoder — which is
+#     how an entire multiplayer slice passed 19 assertions while the real client never connected.
+if [ -f server/game_server.mjs ] && [ -f src/net/SyncProtocol.gd ]; then
+	gd=$(sed -n '/^enum Msg {/,/^}/p' src/net/SyncProtocol.gd \
+		| grep -oE '[A-Z0-9_]+ *= *[0-9]+' | sed -E 's/ *= *([0-9]+)/=\1/' | sort)
+	js=$(sed -n '/^const Msg = {/,/^};/p' server/game_server.mjs \
+		| grep -oE '[A-Z0-9_]+: *[0-9]+' | sed -E 's/: *([0-9]+)/=\1/' | sort)
+	if [ -z "$gd" ] || [ "$gd" != "$js" ]; then
+		hit "R8 两端消息表不一致（gd=$(echo "$gd" | wc -l) js=$(echo "$js" | wc -l)）" \
+			"$(diff <(echo "$gd") <(echo "$js") | head -6)"
+	else
+		note pass "R8 两端消息表一致（$(echo "$gd" | wc -l) 条）"
+	fi
+else
+	note skip "R8 缺少协议文件，未检查"
+fi
+
 echo "-----"
-if [ "$FAIL" -eq 0 ]; then echo "review: PASS (7 rules)"; else echo "review: FAIL"; fi
+if [ "$FAIL" -eq 0 ]; then echo "review: PASS (8 rules)"; else echo "review: FAIL"; fi
 exit $FAIL
