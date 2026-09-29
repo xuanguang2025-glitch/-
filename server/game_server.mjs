@@ -89,7 +89,8 @@ function decode(buf) {
     const p = {};
     switch (msg) {
       case Msg.C2S_HELLO:
-        p.token = String(rest[0] ?? ''); p.client_version = Number(rest[1] ?? 0); break;
+        p.token = String(rest[0] ?? ''); p.client_version = Number(rest[1] ?? 0);
+        p.spawn_x = Number(rest[2] ?? 1150); p.spawn_z = Number(rest[3] ?? 300); break;
       case Msg.C2S_RECONNECT:
         p.session_id = String(rest[0] ?? ''); p.last_seq = Number(rest[1] ?? 0); break;
       case Msg.C2S_INPUT:
@@ -232,8 +233,12 @@ export function startGameServer(opts = {}) {
     peers.set(peer, { session_id: sessionId, buffer: Buffer.alloc(0) });
     // If this player was already in the world (reconnect-without-C2S_RECONNECT), restore them.
     if (!players.has(account.player_id)) {
+      // The client's reported spawn is a seed, not an instruction: it has to be a finite point
+      // inside the map, and everything after this instant is integrated server-side from inputs.
+      const sx = Number.isFinite(p.spawn_x) ? Math.max(-6000, Math.min(6000, p.spawn_x)) : 1150;
+      const sz = Number.isFinite(p.spawn_z) ? Math.max(-6000, Math.min(6000, p.spawn_z)) : 300;
       players.set(account.player_id, {
-        pos: { x: 1150, z: 300 }, yaw: 0, vel: { x: 0, z: 0 }, anim: 0, seq: 0, lastInput: null,
+        pos: { x: sx, z: sz }, yaw: 0, vel: { x: 0, z: 0 }, anim: 0, seq: 0, lastInput: null,
       });
     }
     send(peer, Msg.S2C_WELCOME, {
@@ -341,9 +346,10 @@ export function startGameServer(opts = {}) {
       // NPCs and vehicles would be added here with the same interest filter. For the
       // two-player slice, only remote players are replicated; the spec's LOD tiers become
       // relevant once the server actually simulates thousands of agents.
-      if (entities.length > 0) {
-        send(sess.peer, Msg.S2C_ENTITY_DELTA, { entities });
-      }
+      // Sent even when empty. Suppressing the empty list is the classic way to make a peer
+      // immortal: the last player walks out of interest range, no message arrives, and the
+      // client keeps rendering an avatar for someone the server no longer replicates.
+      send(sess.peer, Msg.S2C_ENTITY_DELTA, { entities });
       // Self-state travels separately from the entity list: the entity list is empty for a lone
       // player, but reconciliation must still run or the client's own position is unfalsifiable.
       send(sess.peer, Msg.S2C_SELF_STATE, { seq: me.seq, x: me.pos.x, z: me.pos.z, yaw: me.yaw });

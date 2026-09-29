@@ -28,6 +28,7 @@ var _want_soak := 0
 var _want_mp := false
 var _mp_host := "127.0.0.1"
 var _mp_port := 9876
+var _mp_shot := ""
 var sim: CitySim
 var _sim_hour := -1
 var _boot_us := 0
@@ -76,6 +77,10 @@ func _read_cli() -> void:
 			if hp.size() == 2:
 				_mp_host = String(hp[0])
 				_mp_port = int(hp[1])
+		elif a.begins_with("--mp-shot="):
+			# Windowed-only: a headless viewport has no rendered texture to save, so this exists to
+			# let the "you can actually see them" claim be checked by eye, not just by frustum test.
+			_mp_shot = a.trim_prefix("--mp-shot=")
 		elif a == "--validate-test":
 			# Needs streamed chunks to answer "is a generated building already here", so it
 			# waits for the world instead of running at boot.
@@ -315,13 +320,9 @@ func _mp_probe() -> void:
 		print("[mp] FAIL  未获得后端 session token（需要 --backend=<url>）")
 		_fails += 1
 		return
-	var mp := MultiplayerClient.new()
-	mp.name = "MultiplayerClient"
-	mp.configure(creation.backend.token, _mp_host, _mp_port)
-	add_child(mp)
-	# The group CreationSystem resolves when it decides whether to place locally or ask the server.
-	mp.add_to_group("multiplayer")
-	_fails += await MultiplayerProbe.run(get_tree(), mp, player)
+	var mp := MPHarness.attach(self, creation.backend.token, _mp_host, _mp_port)
+	_fails += await MultiplayerProbe.run(get_tree(), self, player, mp, MPHarness.layer_of(mp),
+		creation.backend.base, _mp_shot)
 
 
 ## The simulation's own acceptance contract lives in SimTests; these are the CLI entry points,

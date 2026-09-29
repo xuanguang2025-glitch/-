@@ -14,6 +14,10 @@
 #   * a newline-eating edit spliced a function signature onto its first statement; step 1
 #     (`--editor --quit`) did NOT report it, because scripts that are never instantiated are
 #     not parsed there. Step 2's headless boot is what actually gates compilation.
+#   * killing run.sh left its Godot children and a game server on a 240 s self-exit timer
+#     ticking at 30 Hz, and the identical build then read 66 ms instead of 9.9 ms. run.sh now
+#     counts stray engine processes first and refuses to measure rather than reporting a
+#     number that cannot be told apart from a regression.
 #   * a median over 3 samples still reported 36.8 ms where 5 consecutive idle samples give
 #     17.7-18.0 ms, so the timing gates take 5 samples: one contaminated run must not be able
 #     to carry the median by itself
@@ -28,7 +32,7 @@ STRESS_OBJECTS=1000       # Phase 37 test 3
 SIM_SOAK_HOURS=8760       # one simulated year, ~2.7 s of wall clock
 MAX_SIM_HOUR_MS=1.0
 MIN_SIM_ASSERTS=25        # dropping an assertion must fail the gate, not quietly raise the average
-MIN_MP_ASSERTS=8          # 10b: real Godot client against a live server, 8 checks scripted
+MIN_MP_ASSERTS=14         # 10b: two real clients; replication rendered, frustum-verified
 SIM_LIVE_MIN_HOURS=1      # a real session crossing an hour boundary must tick the economy
 BOOT_ERRORS_ALLOWED=0
 FILE_MAX_LINES=900

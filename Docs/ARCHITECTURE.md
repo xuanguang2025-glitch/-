@@ -64,6 +64,11 @@
 | 构件按真实公制尺寸放置，缩放对其不生效 | `BuildTemplates._tpl_of` 对 `kind=="prop"` 短路 | `--create-test`：`构件不参与缩放` |
 | 多人模式下放置是请求而非写入 | `CreationSystem.place()` → bridge → 服务端 confirm | `server/multiplayer_test.mjs`：B 收到 A 的建筑推送、B 不能删 A 的建筑 |
 | 断线重连恢复完整世界状态 | game_server grace period + snapshot | `server/multiplayer_test.mjs`：A 断开→B 放置→A 重连后快照含两人建筑 |
+| 出生点只有一个来源 | `C2S_HELLO` 带 `spawn_x/spawn_z`，服务器只作种子并夹在图内 | BUG-026（两端各算一套，基线差 145 m，回弹把人拉到别处） |
+| 复制列表必须能表达"这里没人" | tick 无条件发，客户端整体替换而非合并 | `mp_probe`：`对端离开兴趣范围后节点被回收`（BUG-027 曾让 avatar 永不消失） |
+| 服务器权威必须真的能推翻客户端 | `_apply_self_state` 比较两端自上次采样以来的位移 | `mp_probe`：`正常站立不被回弹` + `未经授权的位移被服务器回弹` + `回弹后位置服从服务器` |
+| 复制到的状态必须被呈现 | `RemoteAvatarLayer` 按 `remote_entities` 建点并平滑 | `mp_probe`：`对端玩家被实例化为可见节点`、`对端玩家位于本地相机视锥内` |
+| 测量环境本身是门禁的一部分 | `run.sh` 启动前统计残留 Godot / game_server | 有残留即 `exit 2` 拒绝测量（同一份代码曾被并发顶到 66 ms，与回归无法区分） |
 
 ## 2. 后端（`backend/`）+ 游戏服务器（`server/`）
 
@@ -95,7 +100,7 @@ Client ──TCP + [4B 长度][UTF-8 JSON]──► server/game_server.mjs (Dedi
 | 层 | 谁实现客户端 | 证明什么 | 命令 |
 |---|---|---|---|
 | 服务器契约 | Node 假客户端（复用服务器编解码） | 服务器的规则确实生效 | `node server/multiplayer_test.mjs`（21 条） |
-| 真实互通 | **游戏内的 `MultiplayerClient.gd`** |  shipped 客户端真能连上并按同一契约说话 | `bash Pipeline/mp_probe.sh`（8 条） |
+| 真实互通 | **游戏内的 `MultiplayerClient.gd`** |  shipped 客户端真能连上并按同一契约说话 | `bash Pipeline/mp_probe.sh`（14 条） |
 
 第一层单独存在时**永远发现不了跨语言接缝的断裂**——它和服务器共用同一个编解码。R8
 （`Pipeline/review.sh`）额外把两端的消息 id 表逐条对齐，作为第三道防线。

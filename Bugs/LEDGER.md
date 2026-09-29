@@ -30,6 +30,8 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-023 | **跨语言接缝无人验证**：客户端 `MultiplayerClient.gd` 走 ENet + `var_to_bytes`，服务器 `game_server.mjs` 走 TCP + msgpack，两边各自自洽但永远连不上；而 `multiplayer_test.mjs` 的"客户端"是用服务器同一套编解码写的 Node 假客户端，所以 19 条断言与流水线全绿都建立在从未被连接过的路径上。`SyncProtocol.gd` 的注释还写着"msgpack 两端原生支持"（Godot 并不支持） | green | `Pipeline/mp_probe.sh`（真实 Godot 客户端 8 条断言）+ `review.sh` R8（两份消息表逐项对齐）。首条断言即"客户端与服务器完成握手" |
 | BUG-024 | `PackedByteArray` 先 `resize(4+n)` 写长度头、再 `append_array(payload)`，得到的是 `[长度头][n 个 0][payload]`：服务器按头部声明读到的是 n 个 NUL 字节，报 `decode error ... is not valid JSON`。Godot 4.4 的 `PackedByteArray` 既没有 `set_bytes()` 也没有大端 `encode_32_be()`，长度头只能逐字节写 | green | `mp_probe` 握手断言（帧错就收不到 WELCOME）+ `game_server.mjs` 的 `[gs] decode error` 日志；帧写入见 `MultiplayerClient._send` |
 | BUG-025 | TCP 被拒时 Godot 的 `get_status()` 返回 `STATUS_NONE`（不是 `STATUS_ERROR`），而 `_process` 只把 ERROR 当作死亡，NONE 被归入"仍在连接"，于是端口不通表现为静默等满 10 秒且无任何原因 | green | `MultiplayerClient._process` 同时处理 NONE/ERROR，并在 `stats()` 与探针里输出 `connect_err`/`status`；断言名 `服务器断开：socket dead (status=…)` |
+| BUG-026 | **两端出生点不是同一个点**：服务器建玩家记录时硬编码 `pos {x:1150, z:300}`，客户端用 `_find_spawn` 自己算出 `(1222, 426)`。对账规则比较的是"自上次采样以来各自移动了多少"，而基线差 145 m 本身不影响该差分——真正的影响是**回弹会把玩家拉到离他实际所在 145 m 远的地方**，且瞬移断言因此间歇性失败（时好时坏，看起来像测试不稳定） | green | `C2S_HELLO` 增加 `spawn_x/spawn_z`（服务器只把它当种子：必须有限且在图内，之后一切位移由服务器积分）。断言：`空闲时收到服务器权威位置` + `正常站立不被回弹` + `回弹后位置服从服务器`（偏差 < 1 m） |
+| BUG-027 | 服务器 tick 用 `if (entities.length > 0)` 才发实体列表——空列表被抑制，于是**最后一个对端离开兴趣范围后客户端再也收不到"这里没人了"**，那个 avatar 永远留在场景里 | green | tick 无条件发送（含空列表），客户端 `_apply_entity_delta` 改为整体替换而非合并。断言：`对端离开兴趣范围后节点被回收` |
 
 ## red 项的处理约定
 

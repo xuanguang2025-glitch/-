@@ -17,6 +17,26 @@ die() { RUNFAIL=1; printf 'GATE-FAIL  %s\n' "$1"; }
 
 if [ ! -f "$GODOT" ]; then echo "找不到 Godot：$GODOT（用 GODOT=<path> 指定）"; exit 2; fi
 
+# Refuse to measure while a previous run's engine is still alive. Killing a backgrounded child
+# under Git Bash on Windows does not always take, and a leftover Godot or game server silently
+# inflates every number in step 5 — the same build read 10 ms and then 66 ms on identical code.
+# A gate that cannot tell "regression" from "someone else was using the machine" is not a gate.
+count_stray() {
+  if ps -W >/dev/null 2>&1; then
+    ps -W 2>/dev/null | grep -icE 'Godot441|Godot_v4|game_server' || true
+  elif command -v pgrep >/dev/null 2>&1; then
+    pgrep -f 'Godot441|Godot_v4|game_server\.mjs' 2>/dev/null | wc -l | tr -d ' ' || true
+  else
+    echo 0
+  fi
+}
+STRAY=$(count_stray)
+if [ "${ALLOW_STRAY:-}" != "1" ] && [ "${STRAY:-0}" != "0" ]; then
+  echo "GATE-FAIL  检测到 $STRAY 个残留的 Godot / 游戏服务器进程"
+  echo "           并发测量得到的数字没有意义。先清干净再跑；确需忽略时用 ALLOW_STRAY=1。"
+  exit 2
+fi
+
 say "1/10 解析与类注册"
 "$GODOT" --headless --editor --quit --path . >"$LOGDIR/parse.log" 2>&1
 PE=$(grep -ciE "parse error|script error|failed to load" "$LOGDIR/parse.log" || true)

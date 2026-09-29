@@ -38,8 +38,16 @@ fi
 # a real failure shows up as a handshake timeout in the probe, not as a silent skip.
 sleep 2
 
-"$GODOT" --headless --path . -- "--backend=http://127.0.0.1:$GW_PORT" \
-  "--mp-server=127.0.0.1:$GS_PORT" --mp-probe --quit-after 20000 >"$LOG" 2>&1
+# A headless viewport has no rendered texture, so the eye-check mode has to run windowed.
+# MP_SHOT is unset in CI and in the default gate run; it exists so "you can actually see the other
+# player" can be verified by looking at a frame rather than only by a frustum test.
+ARGS=("--backend=http://127.0.0.1:$GW_PORT" "--mp-server=127.0.0.1:$GS_PORT" "--mp-probe")
+if [ -n "${MP_SHOT:-}" ]; then
+  ARGS+=("--mp-shot=$MP_SHOT")
+  "$GODOT" --path . --resolution 1280x720 -- "${ARGS[@]}" --quit-after 20000 >"$LOG" 2>&1
+else
+  "$GODOT" --headless --path . -- "${ARGS[@]}" --quit-after 20000 >"$LOG" 2>&1
+fi
 grep -E "^\[mp\]|^(PASS|FAIL)  " "$LOG"
 
 N=$(grep -c '^PASS  ' "$LOG" || true)

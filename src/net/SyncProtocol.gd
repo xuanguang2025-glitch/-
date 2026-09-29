@@ -22,7 +22,7 @@ extends RefCounted
 
 enum Msg {
 	# --- Handshake (reliable) -------------------------------------------------
-	C2S_HELLO        = 1,   # {token, client_version}
+	C2S_HELLO        = 1,   # {token, client_version, spawn_x, spawn_z}
 	S2C_WELCOME      = 2,   # {player_id, session_id, snapshot}
 	C2S_RECONNECT    = 3,   # {session_id, last_seq}
 	S2C_SNAPSHOT     = 4,   # full world state for reconnect / initial sync
@@ -94,6 +94,8 @@ static func encode(msg: int, payload: Dictionary) -> PackedByteArray:
 		Msg.C2S_HELLO:
 			arr.append(String(payload.get("token", "")))
 			arr.append(int(payload.get("client_version", PROTOCOL_VERSION)))
+			arr.append(float(payload.get("spawn_x", 0.0)))
+			arr.append(float(payload.get("spawn_z", 0.0)))
 		Msg.S2C_WELCOME:
 			arr.append(String(payload.get("player_id", "")))
 			arr.append(String(payload.get("session_id", "")))
@@ -171,6 +173,8 @@ static func decode(data: PackedByteArray) -> Dictionary:
 		Msg.C2S_HELLO:
 			p["token"] = String(arr[1]) if arr.size() > 1 else ""
 			p["client_version"] = int(arr[2]) if arr.size() > 2 else 0
+			p["spawn_x"] = float(arr[3]) if arr.size() > 3 else 0.0
+			p["spawn_z"] = float(arr[4]) if arr.size() > 4 else 0.0
 		Msg.S2C_WELCOME:
 			p["player_id"] = String(arr[1]) if arr.size() > 1 else ""
 			p["session_id"] = String(arr[2]) if arr.size() > 2 else ""

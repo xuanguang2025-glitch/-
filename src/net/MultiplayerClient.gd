@@ -42,6 +42,9 @@ var auth_token := ""
 var server_url := "127.0.0.1"
 var server_port := 9876
 var connect_err := -1		# Error code from the last connect_to_host attempt
+## False makes the client a pure receiver, which is what a synthetic peer in the round-trip probe
+## needs: the probe drives movement explicitly instead of reading local key state.
+var auto_input := true
 
 ## The last authoritative state the server sent for every other entity in interest range.
 ## Stored rather than dropped: a renderer that is not written yet is a known gap, but a client
@@ -127,7 +130,7 @@ func _process(delta: float) -> void:
 			pass	# STATUS_CONNECTING: keep waiting
 
 	_send_t += delta
-	if _send_t >= 1.0 / SEND_HZ and _handshaken and not session_id.is_empty():
+	if auto_input and _send_t >= 1.0 / SEND_HZ and _handshaken and not session_id.is_empty():
 		_send_t = 0.0
 		_send_input()
 
@@ -223,9 +226,20 @@ func _on_receive(data: PackedByteArray) -> void:
 
 
 func _send_hello() -> void:
+	# The client reports where it actually spawned. The server remains authoritative about
+	# everything after that instant — it integrates movement from inputs and clamps impossible
+	# speed — but it cannot seed a position it has no way to compute, and hardcoding one left the
+	# two ends 145 m apart from the first frame, which made every later displacement comparison
+	# meaningless.
+	var rig := get_tree().get_first_node_in_group("player")
+	var spawn := Vector3.ZERO
+	if rig != null:
+		spawn = rig.global_position
 	_send(SyncProtocol.Msg.C2S_HELLO, {
 		"token": auth_token,
 		"client_version": SyncProtocol.PROTOCOL_VERSION,
+		"spawn_x": spawn.x,
+		"spawn_z": spawn.z,
 	}, SyncProtocol.Channel.RELIABLE)
 
 
@@ -249,20 +263,26 @@ func _send_input() -> void:
 		move_dir.x -= 1.0
 	if Input.is_action_pressed("move_right"):
 		move_dir.x += 1.0
-	if move_dir.length_squared() > 0.001:
-		move_dir = move_dir.normalized()
-	_input_seq += 1
 	var yaw_val := 0.0
 	if "yaw" in player_node:
 		yaw_val = float(player_node.yaw)
-	var payload := {
+	send_move(move_dir, yaw_val)
+
+
+## Public because the round-trip probe needs a second client that moves on command rather than
+## on keypress, and duplicating the sequence bookkeeping in the probe would let the two paths
+## disagree about what an input is. Normalises the direction the same way the rig does.
+func send_move(move_dir: Vector2, yaw: float, dt := -1.0) -> void:
+	if move_dir.length_squared() > 0.001:
+		move_dir = move_dir.normalized()
+	_input_seq += 1
+	_send(SyncProtocol.Msg.C2S_INPUT, {
 		"seq": _input_seq,
-		"dt": get_process_delta_time(),
+		"dt": get_process_delta_time() if dt < 0.0 else dt,
 		"move_dir": move_dir,
-		"yaw": yaw_val,
+		"yaw": yaw,
 		"actions": 0,
-	}
-	_send(SyncProtocol.Msg.C2S_INPUT, payload, SyncProtocol.Channel.UNRELIABLE)
+	}, SyncProtocol.Channel.UNRELIABLE)
 
 
 func request_create(tpl: String, x: float, z: float, yaw: float, scale: float,
@@ -318,14 +338,18 @@ func _apply_snapshot(snap: Dictionary) -> void:
 			remote_creation.emit(c)
 
 
+## The server sends the complete visible set every tick, so this replaces rather than merges:
+## merging would keep an entity alive forever after it left the interest area.
 func _apply_entity_delta(entities: Array) -> void:
+	var next := {}
 	for e in entities:
 		if typeof(e) != TYPE_DICTIONARY:
 			continue
 		var eid := String(e.get("id", ""))
 		if eid.is_empty():
 			continue
-		remote_entities[eid] = e
+		next[eid] = e
+	remote_entities = next
 	entity_delta.emit(entities)
 
 
