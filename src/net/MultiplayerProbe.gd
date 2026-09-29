@@ -37,6 +37,11 @@ static func run(tree: SceneTree, host: Node, rig: Player, mp: MultiplayerClient,
 	mp.creation_rejected.connect(func(_rid: String, reason: String) -> void:
 		rejected[0] = true
 		rejected[1] = reason)
+	# Every economic number this file asserts on comes from the server's own event stream. Reading
+	# a locally-computed balance would prove nothing about who is authoritative (Phase 196).
+	var econ := []
+	mp.econ_event.connect(func(ev: Dictionary) -> void:
+		econ.append(ev))
 
 	mp.connect_to_server()
 	print("[mp] target %s:%d  connect=%d status=%d" % [
@@ -208,6 +213,22 @@ static func run(tree: SceneTree, host: Node, rig: Player, mp: MultiplayerClient,
 			String(rejected[1]))
 	else:
 		fails += _that("黄浦江里的放置被服务器拒绝", false, "竟然被接受")
+	checks += 1
+
+	var build_ev: Dictionary = {}
+	for ev in econ:
+		if String(ev.get("kind", "")) == "build":
+			build_ev = ev
+			break
+	fails += _that("真实客户端收到服务器给出的经济后果", not build_ev.is_empty(),
+		"econ=%d" % econ.size())
+	checks += 1
+	# 1000 signup grant minus the 600 the server charges for a mall. Asserting the exact number is
+	# the point: it can only come out right if the client displayed the ledger's fold rather than
+	# anything it computed itself (Phase 196 rule 2).
+	fails += _that("扣款额与余额都来自服务器账本",
+		int(build_ev.get("delta", 0)) == -600 and int(build_ev.get("balance", -1)) == 400,
+		str(build_ev))
 	checks += 1
 
 	var s2: Dictionary = mp.stats()

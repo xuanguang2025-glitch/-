@@ -24,6 +24,12 @@ static func attach(host: Node, token: String, url: String, port: int) -> Multipl
 	mp.add_child(layer)
 	layer.bind(mp)
 	mp.add_to_group("multiplayer")
+	# The server's economic verdict has to surface somewhere or "the ledger is the fact" is just a
+	# sentence in a doc. Printed rather than HUD'd for now: the HUD has no money line yet.
+	mp.econ_event.connect(func(ev: Dictionary) -> void:
+		print("[econ] %s player=%s obj=%d Δ%d → 余额 %d" % [
+			String(ev.get("kind", "?")), String(ev.get("player_id", "?")),
+			int(ev.get("obj_id", 0)), int(ev.get("delta", 0)), int(ev.get("balance", 0))]))
 	return mp
 
 

@@ -32,6 +32,8 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-025 | TCP 被拒时 Godot 的 `get_status()` 返回 `STATUS_NONE`（不是 `STATUS_ERROR`），而 `_process` 只把 ERROR 当作死亡，NONE 被归入"仍在连接"，于是端口不通表现为静默等满 10 秒且无任何原因 | green | `MultiplayerClient._process` 同时处理 NONE/ERROR，并在 `stats()` 与探针里输出 `connect_err`/`status`；断言名 `服务器断开：socket dead (status=…)` |
 | BUG-026 | **两端出生点不是同一个点**：服务器建玩家记录时硬编码 `pos {x:1150, z:300}`，客户端用 `_find_spawn` 自己算出 `(1222, 426)`。对账规则比较的是"自上次采样以来各自移动了多少"，而基线差 145 m 本身不影响该差分——真正的影响是**回弹会把玩家拉到离他实际所在 145 m 远的地方**，且瞬移断言因此间歇性失败（时好时坏，看起来像测试不稳定） | green | `C2S_HELLO` 增加 `spawn_x/spawn_z`（服务器只把它当种子：必须有限且在图内，之后一切位移由服务器积分）。断言：`空闲时收到服务器权威位置` + `正常站立不被回弹` + `回弹后位置服从服务器`（偏差 < 1 m） |
 | BUG-027 | 服务器 tick 用 `if (entities.length > 0)` 才发实体列表——空列表被抑制，于是**最后一个对端离开兴趣范围后客户端再也收不到"这里没人了"**，那个 avatar 永远留在场景里 | green | tick 无条件发送（含空列表），客户端 `_apply_entity_delta` 改为整体替换而非合并。断言：`对端离开兴趣范围后节点被回收` |
+| BUG-028 | `handleCreate` 里写着"经济副作用：若是商业模板则应用到共享模拟"，而**那一行代码都不存在**。注释描述了一个不存在的行为，比缺失本身更危险——读的人以为已经接上了 | green | 实现为真实的服务器权威扣款 + 账本 + `S2C_ECON_EVENT` 广播（该消息两端早有编解码与通道，却从未被发出）。`multiplayer_test.mjs` 9 条经济断言：扣款额、几何拒绝不扣款、req_id 重放不重复扣款、余额不足被拒、余额内精确扣款、拆除返还、账本可折叠且每笔带 ref、对端也收到事件 |
+| BUG-029 | 端到端契约测试复用固定数据目录，而账号按显示名索引、账本只追加——第二次运行时前一次已把钱花完，**失败看起来像产品有 bug 而不是测试不自洽**；`world_creations.json` 残留同理制造虚假 overlap | green | `main()` 开头 `fs.rmSync(dataDir)`。连续两次 `node server/multiplayer_test.mjs` 均 30/30 |
 
 ## red 项的处理约定
 

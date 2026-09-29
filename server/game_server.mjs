@@ -26,6 +26,26 @@ const CHUNK_SIZE = 250;              // metres — must match GameGlobals.CHUNK_
 const MAX_MOVE_PER_TICK = 14.0;      // m/tick ≈ 420 m/s at 30 Hz; above this is rejected
 const PROTOCOL_VERSION = 1;
 
+// Prices live here because this is the process that takes the money; a client showing a different
+// number would be displaying an opinion, not a fact (Phase 196). Units are cents, the same unit the
+// ledger uses. An id missing from this table is charged DEFAULT_BUILD_COST rather than nothing, so
+// forgetting an entry makes a building wrongly *expensive* — which review rule R9 turns into a
+// build failure before it can become a silent pricing bug.
+const DEFAULT_BUILD_COST = 100;
+const SALVAGE_RATE = 0.25;
+const BUILD_COST = {
+  office_tower: 900, plinth_tower: 700, mall: 600, xiaoqu: 500, factory: 450,
+  villas: 400, lilong: 350, walkup: 300, shopfront: 250, parking: 200,
+  site: 150, park: 120,
+  plane_tree: 20, street_lamp: 25, ad_board: 30, stop_sign: 20, bench: 15,
+  curb_car: 15, litter_bin: 10, bollard: 10, barrier: 10,
+};
+
+function costOf(tpl) {
+  const c = BUILD_COST[tpl];
+  return Number.isFinite(c) ? c : DEFAULT_BUILD_COST;
+}
+
 // Message ids mirror src/net/SyncProtocol.gd exactly. If you add one here, add it there too;
 // if they disagree, two players will silently talk past each other.
 const Msg = {
@@ -285,6 +305,22 @@ export function startGameServer(opts = {}) {
   }
 
   function handleCreate(sess, p) {
+    // Idempotency first: the ledger key is the request id, so a replayed packet cannot buy the
+    // same building twice. Checked before anything else so a duplicate costs nothing and creates
+    // nothing.
+    const key = p.req_id ? `build:${p.req_id}` : null;
+    if (key && store.findTx(sess.player_id, key)) {
+      send(sess.peer, Msg.S2C_CREATE_ACK, { req_id: p.req_id, ok: false, reason: 'duplicate request' });
+      return;
+    }
+    const cost = costOf(p.tpl);
+    const bal = store.balance(sess.player_id);
+    if (bal < cost) {
+      send(sess.peer, Msg.S2C_CREATE_ACK, {
+        req_id: p.req_id, ok: false, reason: `insufficient funds: have ${bal}, need ${cost}`,
+      });
+      return;
+    }
     const obj = {
       id: world.nextObjId++, tpl: p.tpl, x: p.x, z: p.z,
       yaw: p.yaw, scale: p.scale, owner: sess.player_id,
@@ -298,13 +334,24 @@ export function startGameServer(opts = {}) {
     }
     world.creations.set(obj.id, obj);
     persistCreations();
+    // Charged only after every geometric check passed: a placement the world refused must not
+    // also take money. The ledger is the fact — the balance is whatever folding it produces.
+    if (key) {
+      store.tx(sess.player_id, {
+        type: 'UGC_BUILD', amount: -cost, ref: `obj:${obj.id}`, idempotency_key: key,
+      });
+    }
+    const after = store.balance(sess.player_id);
     send(sess.peer, Msg.S2C_CREATE_ACK, { req_id: p.req_id, ok: true, obj_id: obj.id });
     // Stream to every other connected player. Interest management would filter this by chunk;
-    // for the two-player proof-of-concept, broadcast is correct and simple.
+    // for the two-player slice, broadcast is correct and simple.
     broadcastToInterested(Msg.S2C_CREATION_STREAM, { obj }, s => s.player_id !== sess.player_id);
-    // Economy side-effect: if this is a business template, apply it to the shared simulation.
-    // The sim itself runs in-process below; a production deployment would call into CitySim
-    // via the same interface the single-player game uses.
+    // The economic consequence is announced to everyone, payer included, and the number in it
+    // came from the ledger rather than from anything a client asserted.
+    broadcastToInterested(Msg.S2C_ECON_EVENT, {
+      kind: 'build', player_id: sess.player_id, obj_id: obj.id, tpl: obj.tpl,
+      delta: -cost, balance: after,
+    });
   }
 
   function handleRemove(sess, p) {
@@ -319,9 +366,23 @@ export function startGameServer(opts = {}) {
     }
     world.creations.delete(obj.id);
     persistCreations();
+    const rkey = p.req_id ? `demolish:${p.req_id}` : null;
+    let credit = 0;
+    if (rkey && !store.findTx(sess.player_id, rkey)) {
+      // Demolition returns salvage instead of nothing, so removal is auditable too: the ledger
+      // explains every cent of the balance either way.
+      credit = Math.floor(costOf(obj.tpl) * SALVAGE_RATE);
+      store.tx(sess.player_id, {
+        type: 'UGC_DEMOLISH', amount: credit, ref: `obj:${obj.id}`, idempotency_key: rkey,
+      });
+    }
     send(sess.peer, Msg.S2C_REMOVE_ACK, { req_id: p.req_id, ok: true });
     broadcastToInterested(Msg.S2C_CREATION_STREAM, { obj: { ...obj, removed: true } },
       s => s.player_id !== sess.player_id);
+    broadcastToInterested(Msg.S2C_ECON_EVENT, {
+      kind: 'demolish', player_id: sess.player_id, obj_id: obj.id, tpl: obj.tpl,
+      delta: credit, balance: store.balance(sess.player_id),
+    });
   }
 
   function tick() {

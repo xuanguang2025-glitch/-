@@ -99,8 +99,8 @@ Client ──TCP + [4B 长度][UTF-8 JSON]──► server/game_server.mjs (Dedi
 
 | 层 | 谁实现客户端 | 证明什么 | 命令 |
 |---|---|---|---|
-| 服务器契约 | Node 假客户端（复用服务器编解码） | 服务器的规则确实生效 | `node server/multiplayer_test.mjs`（21 条） |
-| 真实互通 | **游戏内的 `MultiplayerClient.gd`** |  shipped 客户端真能连上并按同一契约说话 | `bash Pipeline/mp_probe.sh`（14 条） |
+| 服务器契约 | Node 假客户端（复用服务器编解码） | 服务器的规则确实生效 | `node server/multiplayer_test.mjs`（31 条） |
+| 真实互通 | **游戏内的 `MultiplayerClient.gd`** |  shipped 客户端真能连上并按同一契约说话 | `bash Pipeline/mp_probe.sh`（16 条） |
 
 第一层单独存在时**永远发现不了跨语言接缝的断裂**——它和服务器共用同一个编解码。R8
 （`Pipeline/review.sh`）额外把两端的消息 id 表逐条对齐，作为第三道防线。
@@ -114,6 +114,10 @@ Client ──TCP + [4B 长度][UTF-8 JSON]──► server/game_server.mjs (Dedi
 - 客户端把自己瞬移 240 m → 服务器回弹，落点与服务器位置偏差 < 1 m（`mp_probe` 断言）
 - 客户端站在原地 → **0 次回弹**。这条和上一条同等重要：只在客户端越界时才生效的规则才是权威，
   每帧都拽一下的规则只是噪声，任何人都能写出后者
+- 建造先过账本再过几何：`handleCreate` 的顺序是幂等键 → 余额 → 几何 → 写入世界 → 扣款。
+  被世界拒绝的放置不能同时把钱拿走；重放同一个 `req_id` 既造不出第二个也扣不出第二次
+- 经济事件由服务器发起：`S2C_ECON_EVENT` 带的是账本逐笔折叠出的余额。协议里定义了却从未发出的
+  消息等同于没定义——R8 只能对齐 id，"真的发了没有"必须靠断言
 
 ## 3. Part 7 要求但**尚未实现**的东西
 

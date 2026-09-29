@@ -9,6 +9,7 @@
 // Every assertion is a line in the ledger; if any fails the pipeline gate fails.
 
 import net from 'node:net';
+import fs from 'node:fs';
 import { makeApp } from '../backend/server.mjs';
 import { startGameServer } from './game_server.mjs';
 import { Store } from '../backend/store.mjs';
@@ -102,6 +103,10 @@ async function registerAndLogin(displayName) {
 }
 
 async function main() {
+  // Start from an empty data directory. Accounts are keyed by display name and the ledger is
+  // append-only, so a leftover directory from a previous run would hand these players a spent
+  // balance and a world full of overlapping buildings — the failures would look like product bugs.
+  fs.rmSync('backend/data_test_mp', { recursive: true, force: true });
   const store = new Store('backend/data_test_mp');
   const gw = makeApp({ store, port: GW_PORT });
   gw.server.listen(GW_PORT, '127.0.0.1');
@@ -173,6 +178,58 @@ async function main() {
   cA.send(20, { req_id: 'r2', tpl: 'mall', x: 0, z: 0, yaw: 0, scale: 1, name: '', occ: -1 }); // Huangpu river
   const ackBad = await cA.waitFor(22);
   ok('河里的建筑被服务器拒绝', ackBad && ackBad[2] === false, JSON.stringify(ackBad));
+
+  // --- server-authoritative economy (Phase 196 / 198) ---
+  // Every number here is read out of the ledger the server writes, not out of anything a client
+  // claimed. A fresh data directory is what makes this reproducible: accounts are keyed by display
+  // name, so a leftover ledger from the previous run would spend this one down to nothing.
+  const pidA = String(welcA[1]);
+  const balA = () => store.balance(pidA);
+  ok('建造按服务器价目扣款（mall 600）', balA() === 400, `balance=${balA()}`);
+  ok('被几何拒绝的放置不扣款', balA() === 400, `balance=${balA()}`);
+
+  const evB = await cB.waitFor(30);
+  ok('对端也收到这笔经济事件',
+    evB && evB[1]?.kind === 'build' && evB[1]?.delta === -600, JSON.stringify(evB?.[1]));
+
+  cA.send(20, { req_id: 'r1', tpl: 'mall', x: 2400, z: 2400, yaw: 0, scale: 1, name: '', occ: -1 });
+  const ackDup = await cA.waitFor(22);
+  ok('同一 req_id 重放被拒',
+    ackDup && ackDup[2] === false && /duplicate/.test(String(ackDup[4])), JSON.stringify(ackDup));
+  ok('重放没有再次扣款', balA() === 400, `balance=${balA()}`);
+
+  cA.send(20, { req_id: 'r9', tpl: 'mall', x: 2600, z: 2600, yaw: 0, scale: 1, name: '', occ: -1 });
+  const ackPoor = await cA.waitFor(22);
+  ok('余额不足被服务器拒绝',
+    ackPoor && ackPoor[2] === false && /insufficient/.test(String(ackPoor[4])),
+    JSON.stringify(ackPoor));
+
+  cA.send(20, { req_id: 'r10', tpl: 'park', x: 2600, z: 2600, yaw: 0, scale: 1, name: '', occ: -1 });
+  const ackPark = await cA.waitFor(22);
+  ok('余额内的作品仍可建造并精确扣款（park 120）',
+    ackPark && ackPark[2] === true && balA() === 280, `ack=${JSON.stringify(ackPark)} balance=${balA()}`);
+
+  const ledger = store.txs(pidA);
+  ok('账本逐笔折叠即余额，且每笔建造都留可审计 ref',
+    ledger.reduce((a, t) => a + t.amount, 0) === balA()
+    && ledger.filter(t => t.type === 'UGC_BUILD').every(t => /^obj:\d+$/.test(String(t.ref))),
+    `txs=${ledger.length} balance=${balA()}`);
+
+  if (ackPark && ackPark[2] === true) {
+    cA.send(21, { req_id: 'r11', obj_id: Number(ackPark[3]) });
+    const ackDemo = await cA.waitFor(23);
+    ok('拆除返还 25% 废料值并入账',
+      ackDemo && ackDemo[2] === true && balA() === 310, `balance=${balA()}`);
+  }
+
+  // R9 keeps the price table and the template list aligned at build time, but the claim that a
+  // missing entry charges the default rather than nothing is a runtime property and needs its own
+  // evidence — otherwise "fails safe" is just an adjective.
+  cA.send(20, { req_id: 'r12', tpl: 'not_a_real_template', x: 2800, z: 2600, yaw: 0, scale: 1, name: '', occ: -1 });
+  const ackUnknown = await cA.waitFor(22);
+  ok('未知模板按默认价收费而不是免费',
+    ackUnknown && ackUnknown[2] === true && balA() === 310 - 100,
+    `ack=${JSON.stringify(ackUnknown)} balance=${balA()}`);
 
   // --- Disconnect + reconnect ---
   cA.close();

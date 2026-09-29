@@ -71,6 +71,26 @@ else
 	note skip "R8 缺少协议文件，未检查"
 fi
 
+# R9  The server owns the price list, but its keys must be exactly the template ids the client can
+#     actually place. A missing entry silently charges the default, and a stale one means a template
+#     was renamed without anyone noticing — both are the same drift R8 exists for, one layer up.
+if [ -f server/game_server.mjs ] && [ -f src/creation/BuildTemplates.gd ]; then
+	tpl=$(grep -oE '"id": "[a-z_0-9]+"' src/creation/BuildTemplates.gd \
+		| sed -E 's/.*"([a-z_0-9]+)"$/\1/' | sort -u)
+	cost=$(sed -n '/^const BUILD_COST = {/,/^};/p' server/game_server.mjs \
+		| grep -oE '[a-z_0-9]+:[[:space:]]*[0-9]+' | cut -d: -f1 | sort -u)
+	if [ -z "$tpl" ]; then
+		hit "R9 无法从 BuildTemplates.gd 取到模板 id" "解析失败即视为门禁不可判定"
+	elif [ "$tpl" != "$cost" ]; then
+		hit "R9 价目表与模板清单不一致" \
+			"$(diff <(echo "$tpl") <(echo "$cost") | head -8)"
+	else
+		note pass "R9 价目表与模板清单一致（$(echo "$tpl" | wc -l) 项）"
+	fi
+else
+	note skip "R9 缺少价目表或模板文件，未检查"
+fi
+
 echo "-----"
-if [ "$FAIL" -eq 0 ]; then echo "review: PASS (8 rules)"; else echo "review: FAIL"; fi
+if [ "$FAIL" -eq 0 ]; then echo "review: PASS (9 rules)"; else echo "review: FAIL"; fi
 exit $FAIL
