@@ -30,9 +30,9 @@ func _ready() -> void:
 	add_to_group("traffic")
 	sim = get_tree().get_first_node_in_group("sim")
 	_rng.seed = 0x7A7E
-	_sedan = _make(_sedan_mesh(), Assets.props_mat(), true)
+	_sedan = _make(_sedan_mesh(), Assets.props_mat(false), true)
 	_cabin = _make(_cabin_mesh(), Assets.std(Color(0.05, 0.06, 0.08), 0.08, 0.2), false)
-	_bus = _make(_bus_mesh(), Assets.props_mat(), true)
+	_bus = _make(_bus_mesh(), Assets.props_mat(false), true)
 	_lamps = _make(_lamp_mesh(), Assets.emissive_mat(), false)
 	_lamps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_sedan)

@@ -153,16 +153,20 @@ static func lamp_mat() -> StandardMaterial3D:
 
 
 ## Vertex-coloured clutter (poles, trees, walls, roof plant) shares one material so all
-## merged props in a chunk are a single draw call.
-static func props_mat() -> StandardMaterial3D:
-	var k := "m_props"
+## merged props in a chunk are a single draw call. The weathering is world-space, so anything
+## that moves has to ask for `anchored = false` or the stains would slide across the surface.
+static func props_mat(anchored: bool = true) -> ShaderMaterial:
+	var k := "m_props_%d" % (1 if anchored else 0)
 	if _cache.has(k):
 		return _cache[k]
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = 0.78
-	m.metallic = 0.05
-	return _put(k, m) as StandardMaterial3D
+	var m := ShaderMaterial.new()
+	m.shader = load("res://src/shaders/props.gdshader")
+	m.set_shader_parameter("noise_tex", noise())
+	m.set_shader_parameter("anchored", 1.0 if anchored else 0.0)
+	m.set_shader_parameter("night", 0.0)
+	m.set_shader_parameter("wetness", 0.0)
+	_env_mats.append(m)
+	return _put(k, m) as ShaderMaterial
 
 
 ## Self-lit surfaces: signage, street lamps, aviation warning lights.

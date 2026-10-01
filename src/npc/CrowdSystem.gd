@@ -54,7 +54,7 @@ func _make_pose(pose: int) -> MultiMeshInstance3D:
 	m.use_colors = true
 	m.mesh = _human_mesh(pose)
 	mi.multimesh = m
-	mi.material_override = Assets.props_mat()
+	mi.material_override = Assets.props_mat(false)
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	mi.extra_cull_margin = 60.0
 	# MultiMesh does not refresh its AABB as instance transforms change, so an auto-computed
