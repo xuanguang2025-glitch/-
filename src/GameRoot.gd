@@ -13,6 +13,8 @@ var streamer: WorldStreamer
 var player: Player
 var car: Car
 var hud: DebugHUD
+var menu: MainMenu
+var _spawn_at := Vector2.ZERO
 var creation: CreationSystem
 
 const SPAWN := Vector3(1150.0, 0.6, 300.0)
@@ -26,6 +28,7 @@ var _want_sync := false
 var _want_sim := false
 var _want_soak := 0
 var _want_mp := false
+var _want_menu := false
 var _mp_host := "127.0.0.1"
 var _mp_port := 9876
 var _mp_shot := ""
@@ -72,6 +75,8 @@ func _read_cli() -> void:
 			_want_soak = int(a.trim_prefix("--sim-soak="))
 		elif a == "--mp-probe":
 			_want_mp = true
+		elif a == "--menu-test":
+			_want_menu = true
 		elif a.begins_with("--mp-server="):
 			var hp := a.trim_prefix("--mp-server=").split(":")
 			if hp.size() == 2:
@@ -231,6 +236,7 @@ func _ready() -> void:
 	player = Player.new()
 	player.name = "Player"
 	var spawn := _find_spawn(Vector2(SPAWN.x, SPAWN.z))
+	_spawn_at = spawn
 	player.position = Vector3(spawn.x, 1.2, spawn.y)
 	add_child(player)
 	player.yaw = SPAWN_YAW
@@ -262,6 +268,17 @@ func _ready() -> void:
 	_report.append("spawn=%s" % str(spawn))
 	print("=== boot ok: %s ===" % " | ".join(_report))
 	await _read_cli()
+	mount_menu()
+
+
+## The menu is what makes the desktop shortcut a way to *start* rather than a way to fall into a
+## world. It is suppressed whenever any user argument is present: those arguments belong to gates
+## and benchmarks, which compare streaming timings and screenshots against a city with no panel
+## over it. `force` is how the self-test gets one despite running under an argument.
+func mount_menu(force := false) -> MainMenu:
+	if not force and not OS.get_cmdline_user_args().is_empty():
+		return null
+	return MenuMount.mount(self, creation, streamer, player, _spawn_at)
 
 const DEVICE_PATH := "user://device.json"
 
@@ -752,6 +769,10 @@ func _process(delta: float) -> void:
 		_want_soak = 0
 		_sim_soak(h)
 		get_tree().quit()
+	if _want_menu and streamer.stats()["alive"] > 0:
+		_want_menu = false
+		_fails += await MenuTests.run(self)
+		get_tree().quit()
 	if _want_mp and streamer.stats()["alive"] > 0:
 		# Gate on any geometry rather than the whole city: the probe tests the wire, and waiting for
 		# 289 chunks to build would add ten seconds of unrelated work to every pipeline run.
@@ -851,7 +872,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				QualityPresets.cycle()
 			KEY_F1:
 				GameGlobals.say("控制：WASD 移动 / Shift 疾跑 / 空格 跳跃 / C 视角 / F 上下车 / " +
-					"V 天气 / T 时间 / P 画质 / B 建造模式 / M 地图 / Y 复位")
+					"V 天气 / T 时间 / P 画质 / B 建造模式 / M 地图 / Y 复位 / Esc 菜单")
 			KEY_B:
 				creation.toggle()
 				player.fly = creation.active

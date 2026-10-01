@@ -52,6 +52,16 @@ say "3/10 功能自测"
 grep -q "creation self-test: PASS" "$LOGDIR/create.log" && echo "create-test: PASS" || { grep "FAIL" "$LOGDIR/create.log" | head -5; die "create-test"; }
 "$GODOT" --path . --resolution 1280x720 -- --validate-test --spawn=1150,300 >"$LOGDIR/validate.log" 2>&1
 grep -q "validation self-test: PASS" "$LOGDIR/validate.log" && echo "validate-test: PASS" || { grep "FAIL" "$LOGDIR/validate.log" | head -5; die "validate-test"; }
+# The menu is driven through the same entry points a click uses (choose / set_quality) rather than
+# through the mouse, so a button that exists and does nothing fails here instead of in the field.
+"$GODOT" --headless --path . --quit-after 4000 -- --menu-test >"$LOGDIR/menu.log" 2>&1
+grep -q "main menu self-test: PASS" "$LOGDIR/menu.log" || { grep "FAIL" "$LOGDIR/menu.log" | head -5; die "menu-test"; }
+MA=$(num '\([0-9]+ checks' "$LOGDIR/menu.log")
+MF=$(num '[0-9]+ failures' "$LOGDIR/menu.log")
+require "菜单断言数" "$MA"
+[ "$MA" -ge "$MIN_MENU_ASSERTS" ] || die "主菜单断言仅 $MA 条（门槛 $MIN_MENU_ASSERTS）"
+[ "$MF" = "0" ] || die "主菜单自测报告 $MF 处失败"
+echo "menu-test: PASS ($MA checks)"
 
 say "4/10 世界普查"
 "$GODOT" --headless --path . --quit-after 60 -- --census >"$LOGDIR/census.log" 2>&1

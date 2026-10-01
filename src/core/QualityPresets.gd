@@ -88,6 +88,14 @@ func cfg() -> Dictionary:
 	return PRESETS[tier]
 
 
+func tier_name(t: int) -> String:
+	return String(PRESETS[t]["label"])
+
+
+func tier_count() -> int:
+	return PRESETS.size()
+
+
 func set_tier(next: int) -> void:
 	tier = clampi(next, 0, PRESETS.size() - 1)
 	var c: Dictionary = PRESETS[tier]

@@ -63,6 +63,17 @@ jobs:
           cat create.log | grep -E "PASS|FAIL|self-test"
           grep -q "creation self-test: PASS" create.log
 
+      # The menu is headless-testable because it is driven through choose()/set_quality() rather
+      # than through mouse events. Two of its assertions are about what the menu must NOT do:
+      # it must not pause the tree, and the city must keep streaming behind it.
+      - name: 主菜单自测（新游戏 / 画质切档 / 不暂停场景树）
+        run: |
+          timeout 600 "$GODOT" --headless --path . --quit-after 4000 -- --menu-test >menu.log 2>&1 || true
+          grep -E "^PASS|^FAIL|self-test" menu.log
+          # Two-digit check count mirrors MIN_MENU_ASSERTS=10 in Pipeline/gates.sh: dropping an
+          # assertion must fail here rather than quietly lowering the bar.
+          grep -qE "main menu self-test: PASS \([0-9]{2,} checks, 0 failures\)" menu.log
+
       # The city economy is CPU-only state, so its contract runs here rather than waiting for
       # a GPU runner. Frame caps are generous and `timeout` guards the case where streaming
       # never reaches the 250-chunk threshold the test waits on: silence fails, it does not hang.
