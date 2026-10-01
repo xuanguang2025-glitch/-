@@ -13,6 +13,12 @@ varying vec3 v_world;
 varying vec4 v_col;
 varying vec3 v_nrm;
 
+float h12(vec2 p) {
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
+}
+
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_col = COLOR;
@@ -58,9 +64,15 @@ void fragment() {
 		rough = 0.52;
 		spec = 0.45;
 	} else if (code < 4.5) {
-		// Cast concrete
-		alb *= 0.84 + 0.30 * fine;
-		rough = 0.88;
+		// Cast concrete in sawn panels. The joint grid is what makes a 60 m slab read as a built
+		// surface instead of an infinite plane, and the dust in the joints is what makes it read
+		// as maintained rather than new.
+		vec2 jd = abs(fract(wp / 4.5 + 0.5) - 0.5);
+		float joint = 1.0 - smoothstep(0.474, 0.492, max(jd.x, jd.y));
+		float stain = texture(noise_tex, wp * 0.055).r;
+		alb *= (0.80 + 0.26 * fine) * mix(1.0, 0.60, joint);
+		alb *= mix(vec3(1.0), vec3(0.87, 0.85, 0.80), smoothstep(0.45, 0.95, stain) * 0.5);
+		rough = mix(0.90, 0.70, joint);
 	} else if (code < 5.5) {
 		// Compacted track
 		alb *= 0.66 + 0.42 * broad;
@@ -74,6 +86,18 @@ void fragment() {
 		alb *= 0.70 + 0.20 * fine;
 		rough = 0.80;
 	}
+
+	if (code > 1.5) {
+		// Hardscape is laid panel by panel, no two batches of mix match, and none of it is as
+		// bright as a default material — clean concrete sits near 0.45 albedo and weathered
+		// stone below that. Without this the plaza reads as an unlit sheet of paper.
+		float panel = h12(floor(wp / 4.5));
+		alb *= mix(vec3(0.66, 0.665, 0.69), vec3(0.88, 0.875, 0.86), panel);
+	}
+
+	// Aggregate: hardscape is a million small facets, so roughness varies at centimetre scale.
+	// Without it a sunlit plaza is one matte sheet, which is a large part of the toy look.
+	rough = clamp(rough + (texture(noise_tex, wp * 1.7).r - 0.5) * 0.16, 0.04, 1.0);
 
 	// Wet ground darkens hard and turns specular — the雨后 asphalt-and-stone look.
 	alb *= 1.0 - wetness * 0.42;

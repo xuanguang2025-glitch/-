@@ -73,8 +73,12 @@ void fragment() {
 	alb = mix(alb, glass, pane * (1.0 - band));
 	alb = mix(alb, metal, clamp(band + (1.0 - in_x) * 0.30, 0.0, 1.0));
 
+	// A shopfront is a lit room seen through glass: bright near its own floor, dark under the
+	// ceiling band, different from its neighbour. A uniform glowing rectangle reads as a decal.
+	float shop_depth = smoothstep(0.12, 0.88, 1.0 - f.y);
+	float shop_room = 0.55 + 0.75 * h12(cell * 1.9 + 3.3);
 	if (podium > 0.5 && !roof) {
-		alb = mix(alb, vec3(0.05, 0.055, 0.065), pane);
+		alb = mix(alb, vec3(0.030, 0.033, 0.040), pane);
 	}
 
 	if (roof) {
@@ -97,9 +101,13 @@ void fragment() {
 	vec3 light_col = mix(warm, cool, step(0.62, r2));
 	// Office floors glow as strips, not perfect rectangles — reads less CG.
 	float glow_shape = pane * (0.55 + 0.45 * smoothstep(0.1, 0.42, f.y));
-	vec3 emis = light_col * glow_shape * lit * (0.9 + 0.6 * night);
+	// A lit window is a dim warm rectangle behind glass, not a bare lamp. Emitting near 1.5 made
+	// the whole skyline clip to white once night bloom was on, which is exactly the cartoon read;
+	// per-pane wattage keeps a tower from being a uniform grid of identical dots.
+	float pane_watt = 0.55 + 0.75 * h12(cell * 3.77 + 5.1);
+	vec3 emis = light_col * glow_shape * lit * (0.22 + 0.30 * night) * pane_watt;
 	if (podium > 0.5 && !roof) {
-		emis += vec3(1.0, 0.82, 0.55) * pane * (0.35 + night * 1.5);
+		emis += vec3(1.0, 0.80, 0.52) * pane * (0.10 + night * 0.30) * shop_depth * shop_room;
 	}
 	if (roof) {
 		emis = vec3(0.0);
@@ -108,7 +116,7 @@ void fragment() {
 	// LED media facade bands on the tallest towers (v_col.a flags them at build time)
 	if (v_col.a > 0.5 && !roof) {
 		float stripe = step(0.5, fract(v_world.y * 0.32 + uv.x * 0.03));
-		emis += vec3(0.10, 0.35, 0.85) * stripe * pane * (0.25 + night * 2.2);
+		emis += vec3(0.10, 0.35, 0.85) * stripe * pane * (0.10 + night * 0.75);
 	}
 
 	ALBEDO = alb;

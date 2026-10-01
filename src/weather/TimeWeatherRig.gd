@@ -39,30 +39,7 @@ func _build() -> void:
 	sky.sky_material = sky_mat
 
 	env = Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.9
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_white = 12.0
-	env.adjustment_enabled = true
-	env.adjustment_contrast = 1.06
-	env.adjustment_saturation = 1.08
-	env.glow_enabled = true
-	env.glow_intensity = 0.42
-	env.glow_bloom = 0.04
-	env.glow_normalized = true
-	env.glow_hdr_threshold = 1.9
-	env.fog_enabled = true
-	env.fog_light_energy = 0.55
-	env.fog_density = 0.000035
-	env.fog_height = 420.0
-	env.fog_aerial_perspective = 0.42
-	env.volumetric_fog_enabled = false
-	env.volumetric_fog_density = 0.012
-	env.volumetric_fog_albedo = Color(0.72, 0.78, 0.86)
-	env.volumetric_fog_emission_energy = 0.0
-	env.ssr_enabled = true
+	EnvironmentGrading.configure(env, sky)
 
 	world_env = WorldEnvironment.new()
 	world_env.environment = env
@@ -71,7 +48,11 @@ func _build() -> void:
 	sun = DirectionalLight3D.new()
 	sun.rotation_order = 2
 	sun.light_indirect_energy = 1.15
+	# A point sun gives every shadow a knife edge, which is one of the tells that reads as
+	# "render" rather than "photograph"; 0.53 degrees is the real angular diameter.
+	sun.light_angular_distance = EnvironmentGrading.SUN_ANGULAR_DEG
 	sun.shadow_enabled = true
+	sun.shadow_blur = 2.0
 	sun.directional_shadow_max_distance = 420.0
 	sun.directional_shadow_blend_splits = true
 	sun.directional_shadow_fade_start = 0.72
@@ -85,10 +66,7 @@ func _build() -> void:
 
 
 func apply_quality(c: Dictionary) -> void:
-	if env == null:
-		return
-	env.ssr_enabled = bool(c["ssr"])
-	env.volumetric_fog_enabled = bool(c["volumetric_fog"])
+	EnvironmentGrading.apply_tier(env, c)
 
 
 func _process(delta: float) -> void:
@@ -135,11 +113,15 @@ func _update() -> void:
 		sun.rotation_degrees = Vector3(-(90.0 - elev), azim, 0.0)
 	else:
 		sun.rotation_degrees = Vector3(-(90.0 - 24.0), 176.0, 0.0)
-	sun.light_energy = lerpf(0.06, 1.35, day_f) * (1.0 - overcast * 0.72)
-	sun.light_color = Color(0.42, 0.52, 0.78).lerp(Color(1.0, 0.80, 0.58),
-		clampf(1.0 - absf(elev) / 22.0, 0.0, 1.0)) if day_f > 0.02 else Color(0.55, 0.64, 0.88)
-	sun.light_color = sun.light_color.lerp(Color(0.78, 0.82, 0.90), overcast * 0.7)
-	sun.shadow_opacity = lerpf(0.86, 0.24, overcast)
+	# The noon sun is a bright source, not a soft key light: at 1.35 energy the whole street read
+	# as dusk at 11:44. The day/night range now lives in exposure instead (see grade()), which
+	# keeps highlights behaving like daylight rather than like a lifted shadow.
+	sun.light_energy = lerpf(0.12, 3.1, day_f) * (1.0 - overcast * 0.68)
+	sun.light_color = EnvironmentGrading.kelvin(lerpf(EnvironmentGrading.K_HORIZON,
+		EnvironmentGrading.K_NOON, clampf(elev / 26.0, 0.0, 1.0))) if day_f > 0.02 \
+		else EnvironmentGrading.kelvin(EnvironmentGrading.K_NIGHT)
+	sun.light_color = sun.light_color.lerp(Color(0.86, 0.88, 0.92), overcast * 0.55)
+	sun.shadow_opacity = lerpf(0.82, 0.22, overcast)
 
 	# --- sky -----------------------------------------------------------------
 	# Radiance for a parametric sky is a real texture regeneration, so it is throttled to
@@ -160,30 +142,28 @@ func _update() -> void:
 		_:
 			base_fog = 0.000030 + 0.000022 * rain_f
 	env.fog_density = base_fog
-	env.fog_light_energy = lerpf(0.55, 0.16, _night) * (1.0 - overcast * 0.3)
-	env.fog_aerial_perspective = lerpf(0.55, 0.16, overcast)
 	env.volumetric_fog_density = 0.0
 	if env.volumetric_fog_enabled:
 		env.volumetric_fog_density = lerpf(0.0035, 0.026, clampf(maxf(rain_f, overcast * 0.6), 0.0, 1.0))
 		env.volumetric_fog_emission_energy = lerpf(0.0, 0.06, _night)
-
-	env.ambient_light_energy = lerpf(0.44, 0.95, day_f) * (1.0 + overcast * 0.30)
-	env.glow_intensity = lerpf(0.30, 0.88, _night)
-	env.glow_bloom = lerpf(0.02, 0.10, _night)
-	env.glow_hdr_threshold = lerpf(2.6, 0.85, _night)
-	env.background_energy_multiplier = lerpf(1.0, 1.22, overcast * 0.4)
+	# Everything sensor-side — exposure, ambient, bloom thresholds, aerial perspective, bounce
+	# light energy, contact shadow strength — is one call, so the grade cannot drift from itself.
+	EnvironmentGrading.grade(env, day_f, _night, overcast, _wet)
 
 	# Street-level pool of light that lifts the player's immediate surroundings at night.
 	# Real lamps are emissive-only geometry, so this stands in for their bounce without
 	# the cost of a dynamic light per pole.
-	glow_light.light_energy = lerpf(0.0, 2.6, _night)
-	glow_light.light_color = Color(1.0, 0.72, 0.42)
+	glow_light.light_energy = lerpf(0.0, 1.2, _night)
+	glow_light.light_color = Color(1.0, 0.78, 0.52)
 	var pv := get_tree().get_first_node_in_group("player")
 	if pv is Node3D:
 		glow_light.global_position = (pv as Node3D).global_position + Vector3(0.0, 5.5, 0.0)
 
 	Assets.set_env(_night, _wet, rain_f)
-	Assets.set_emissive_energy(lerpf(0.10, 7.5, _night))
+	# Signage and lamps are the brightest things in a real night street, but they are still
+	# metres from the camera and the eye adapts: at 7.5 every source clipped through the night
+	# bloom and the skyline turned into white static.
+	Assets.set_emissive_energy(lerpf(0.08, 3.0, _night))
 
 
 func _paint_sky(day_f: float, overcast: float, rain_f: float, weather: int) -> void:

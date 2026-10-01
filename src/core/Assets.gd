@@ -198,7 +198,7 @@ static func set_env(night: float, wetness: float, rain: float) -> void:
 			m.set_shader_parameter("rain", rain)
 	var lm: StandardMaterial3D = _cache.get("m_lamp")
 	if lm != null:
-		lm.emission_energy_multiplier = lerpf(0.05, 14.0, night)
+		lm.emission_energy_multiplier = lerpf(0.05, 5.5, night)
 
 
 # --- Primitive mesh cache ---------------------------------------------------

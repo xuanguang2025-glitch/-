@@ -45,18 +45,30 @@ func _build_collision() -> void:
 
 
 func _build_body() -> void:
+	# Clothing, not one dark silhouette. The whole body shared a near-black material before, which
+	# is why the player read as a chess piece: real figures are at least three tones — coat,
+	# trousers, exposed skin — and every one of them is fabric-matte.
+	var jacket := StandardMaterial3D.new()
+	jacket.albedo_color = Color(0.145, 0.165, 0.205)
+	jacket.roughness = 0.86
+	var trouser := StandardMaterial3D.new()
+	trouser.albedo_color = Color(0.115, 0.115, 0.130)
+	trouser.roughness = 0.90
 	var skin := StandardMaterial3D.new()
-	skin.albedo_color = Color(0.30, 0.32, 0.38)
-	skin.roughness = 0.72
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.10, 0.11, 0.14)
-	dark.roughness = 0.8
+	skin.albedo_color = Color(0.60, 0.45, 0.36)
+	skin.roughness = 0.62
+	var hair := StandardMaterial3D.new()
+	hair.albedo_color = Color(0.055, 0.048, 0.045)
+	hair.roughness = 0.55
+	var shoe := StandardMaterial3D.new()
+	shoe.albedo_color = Color(0.075, 0.072, 0.070)
+	shoe.roughness = 0.70
 	body = MeshInstance3D.new()
 	var torso := CapsuleMesh.new()
 	torso.radius = 0.28
 	torso.height = 0.92
 	body.mesh = torso
-	body.material_overlay = skin
+	body.material_overlay = jacket
 	body.position = Vector3(0, 1.06, 0)
 	add_child(body)
 	head = MeshInstance3D.new()
@@ -66,16 +78,26 @@ func _build_body() -> void:
 	hm.radial_segments = 12
 	hm.rings = 8
 	head.mesh = hm
-	head.material_overlay = dark
+	head.material_overlay = skin
 	head.position = Vector3(0, 1.60, 0)
 	add_child(head)
+	var crown := MeshInstance3D.new()
+	var hcm := SphereMesh.new()
+	hcm.radius = 0.152
+	hcm.height = 0.245
+	hcm.radial_segments = 12
+	hcm.rings = 6
+	crown.mesh = hcm
+	crown.material_overlay = hair
+	crown.position = Vector3(0, 1.655, -0.015)
+	add_child(crown)
 	for s in [-1, 1]:
 		var arm := MeshInstance3D.new()
 		var am := CapsuleMesh.new()
 		am.radius = 0.075
 		am.height = 0.62
 		arm.mesh = am
-		arm.material_overlay = dark
+		arm.material_overlay = jacket
 		arm.position = Vector3(0.34 * s, 1.08, 0)
 		add_child(arm)
 		var leg := MeshInstance3D.new()
@@ -83,10 +105,16 @@ func _build_body() -> void:
 		lm.radius = 0.10
 		lm.height = 0.80
 		leg.mesh = lm
-		leg.material_overlay = dark
+		leg.material_overlay = trouser
 		leg.position = Vector3(0.14 * s, 0.42, 0)
 		leg.name = "leg_%d" % s
 		add_child(leg)
+		var foot := MeshInstance3D.new()
+		foot.mesh = Assets.box(Vector3(0.155, 0.075, 0.30))
+		foot.material_overlay = shoe
+		# Parented to the leg so the walk cycle carries the foot instead of leaving it behind.
+		foot.position = Vector3(0, -0.40, 0.055)
+		leg.add_child(foot)
 
 
 func _build_camera() -> void:
