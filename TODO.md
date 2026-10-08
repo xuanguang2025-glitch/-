@@ -6,6 +6,11 @@
 
 - [x] **客户端接后端存档**：`CreationSystem.mirror_save/pull_save` 走 `PUT/GET /v1/save`，
       本地 `user://` 为离线缓存。验收已就位：`Pipeline/run.sh` 第 8 步（客户端-后端往返一致）。
+- [ ] **真实城市几何替换程序化路网**（外部对照后的首选借力点）：用 OSM（Overpass / blosm /
+      vectiler 的思路，参考 CARLA Digital Twins 的 MIT 实现）导入一个上海城区的真实路网与建筑
+      轮廓，替换 `Lattice`/`CityData` 的程序化路网。验收：同一区域"真实路网 vs 程序化路网"的
+      路段数、转角分布、街区面积对照表 + 一张叠加截图；并明确标注导出数据集按 **ODbL** 署名共享
+      （代码不受影响）。详见 `Docs/EXTERNAL_BASELINE.md`。
 - [ ] **城市模拟落盘**：`CitySim.snapshot()` 写入后端三代存档，`restore()` 在读档时校验版本。
       验收：`--backend-sync-test` 增断言"存→跑 500 小时→读→状态哈希与存前一致"。
 - [ ] **模拟影响个体**：给 tier0 的 `NPCProfile` 绑一个区级收入来源，工资变化改变其目的地
