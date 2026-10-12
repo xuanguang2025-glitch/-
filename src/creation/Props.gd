@@ -36,17 +36,13 @@ static func person_marker(ctx: ChunkCtx) -> void:
 	ctx.emissive.ellipsoid(Transform3D(Basis.IDENTITY, Vector3(0.0, 0.05, 0.0)),
 		Vector3(0.34, 0.02, 0.34), Color(1.0, 0.86, 0.42), 3, 8)
 
+## The player's 悬铃木 and the avenue builder's are the same tree, on purpose: this file's whole
+## claim is that a decorated block and a generated one share their generators, and a second
+## copy of the trunk-and-canopy code is how those two quietly stop looking alike.
 static func plane_tree(ctx: ChunkCtx, c: Vector2, r: float) -> void:
-	var s := 0.85 + r * 0.5
-	ctx.props.cylinder(Transform3D(Basis.IDENTITY, Vector3(c.x, 0.0, c.y)),
-		0.22 * s, 0.14 * s, 3.4 * s, _shade(G, Color(0.26, 0.20, 0.15)), 6, false)
-	var leaf := Color(0.16, 0.27, 0.12) if r < 0.55 else Color(0.25, 0.33, 0.14)
-	leaf.a = CellProgram.CODE_GRASS
-	var xf := Transform3D(Basis.IDENTITY, Vector3(c.x, 3.6 * s, c.y))
-	ctx.props.ellipsoid(xf, Vector3(2.3 * s, 1.35 * s, 2.3 * s), leaf, 4, 7)
-	ctx.props.ellipsoid(xf.translated(Vector3(1.0 * s, 0.6 * s, 0.4 * s)),
-		Vector3(1.45 * s, 0.95 * s, 1.45 * s), leaf, 4, 6)
-	ctx.add_box_collider(Vector3(c.x, 1.7 * s, c.y), Vector3(0.5, 3.4 * s, 0.5), 0.0)
+	var s := 1.05 + r * 0.45
+	CellProgram.tree(ctx, c, s, r)
+	ctx.add_box_collider(Vector3(c.x, 1.4 * s, c.y), Vector3(0.55, 2.8 * s, 0.55), 0.0)
 
 
 static func bench(ctx: ChunkCtx, c: Vector2, yaw: float, r: float) -> void:

@@ -44,6 +44,24 @@ func _build_collision() -> void:
 	add_child(cs)
 
 
+## A hanging limb: segments stacked downward from the node's origin, which is the joint. The
+## capsule this replaces was centred on its own node, so swinging a leg rotated it about mid-thigh
+## and the hip never moved - the walk read as two pills scissoring. Same reason the arms now hang
+## from shoulders instead of being stuck to the side of a pill torso.
+static func _limb_mesh(segs: Array) -> ArrayMesh:
+	var f := MeshFusion.new()
+	var down := Basis.IDENTITY.rotated(Vector3.RIGHT, PI)
+	var c := Color(1, 1, 1)
+	c.a = 0.0
+	var y := 0.0
+	for s in segs:
+		var size: Vector3 = s["size"]
+		f.box(Transform3D(down, Vector3(float(s.get("x", 0.0)), y, float(s.get("z", 0.0)))),
+			size, c)
+		y -= size.y
+	return f.commit()
+
+
 func _build_body() -> void:
 	# Clothing, not one dark silhouette. The whole body shared a near-black material before, which
 	# is why the player read as a chess piece: real figures are at least three tones — coat,
@@ -63,14 +81,30 @@ func _build_body() -> void:
 	var shoe := StandardMaterial3D.new()
 	shoe.albedo_color = Color(0.075, 0.072, 0.070)
 	shoe.roughness = 0.70
+	## Proportions, not primitives. The torso used to be a single capsule, and a capsule has no
+	## shoulders, no waist and no hips, which is the entire difference between a person and an egg:
+	## chest tapering out to the shoulders, a separate pelvis, a neck, and limbs with two segments
+	## each so the elbow and the knee exist in the silhouette.
 	body = MeshInstance3D.new()
-	var torso := CapsuleMesh.new()
-	torso.radius = 0.28
-	torso.height = 0.92
-	body.mesh = torso
+	var chest := MeshFusion.new()
+	var cc := Color(1, 1, 1)
+	cc.a = 0.0
+	chest.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0)), Vector3(0.30, 0.42, 0.185),
+		cc, 1.30, Vector2(0, 0.012), false)
+	body.mesh = chest.commit()
 	body.material_overlay = jacket
-	body.position = Vector3(0, 1.06, 0)
+	body.position = Vector3(0, 1.015, 0)		# pivot at the waist, so the lean bends the spine
 	add_child(body)
+	var hips := MeshInstance3D.new()
+	hips.mesh = Assets.box(Vector3(0.295, 0.175, 0.20))
+	hips.material_overlay = trouser
+	hips.position = Vector3(0, 0.925, 0)
+	add_child(hips)
+	var neck := MeshInstance3D.new()
+	neck.mesh = Assets.cyl(0.055, 0.10, 8)
+	neck.material_overlay = skin
+	neck.position = Vector3(0, 1.435, 0)
+	add_child(neck)
 	head = MeshInstance3D.new()
 	var hm := SphereMesh.new()
 	hm.radius = 0.145
@@ -93,27 +127,34 @@ func _build_body() -> void:
 	add_child(crown)
 	for s in [-1, 1]:
 		var arm := MeshInstance3D.new()
-		var am := CapsuleMesh.new()
-		am.radius = 0.075
-		am.height = 0.62
-		arm.mesh = am
+		arm.mesh = _limb_mesh([
+			{"size": Vector3(0.098, 0.30, 0.108), "x": 0.0},
+			{"size": Vector3(0.082, 0.275, 0.092), "x": 0.0, "z": 0.008}])
 		arm.material_overlay = jacket
-		arm.position = Vector3(0.34 * s, 1.08, 0)
+		# Shoulders sit outside the ribcage and the arms angle away from it; hanging flush against a
+		# flat torso is what makes a figure look flat-backed from behind.
+		arm.position = Vector3(0.212 * s, 1.405, 0)
+		arm.rotation.z = 0.115 * s
+		arm.name = "arm_%d" % s
 		add_child(arm)
+		var hand := MeshInstance3D.new()
+		hand.mesh = Assets.box(Vector3(0.078, 0.085, 0.088))
+		hand.material_overlay = skin
+		hand.position = Vector3(0.0, -0.575, 0.010)
+		arm.add_child(hand)
 		var leg := MeshInstance3D.new()
-		var lm := CapsuleMesh.new()
-		lm.radius = 0.10
-		lm.height = 0.80
-		leg.mesh = lm
+		leg.mesh = _limb_mesh([
+			{"size": Vector3(0.145, 0.45, 0.165), "x": 0.0},
+			{"size": Vector3(0.115, 0.40, 0.135), "x": 0.0, "z": -0.010}])
 		leg.material_overlay = trouser
-		leg.position = Vector3(0.14 * s, 0.42, 0)
+		leg.position = Vector3(0.093 * s, 0.90, 0)	# pivot at the hip
 		leg.name = "leg_%d" % s
 		add_child(leg)
 		var foot := MeshInstance3D.new()
-		foot.mesh = Assets.box(Vector3(0.155, 0.075, 0.30))
+		foot.mesh = Assets.box(Vector3(0.115, 0.070, 0.265))
 		foot.material_overlay = shoe
 		# Parented to the leg so the walk cycle carries the foot instead of leaving it behind.
-		foot.position = Vector3(0, -0.40, 0.055)
+		foot.position = Vector3(0, -0.855, 0.062)
 		leg.add_child(foot)
 
 
@@ -206,8 +247,13 @@ func _physics_process(delta: float) -> void:
 		_bob += delta * (10.0 + _speed_ratio * 8.0)
 		var lean := sin(_bob) * 0.045 * (0.4 + _speed_ratio)
 		if has_node("leg_-1"):
-			get_node("leg_-1").rotation.x = lean * 6.0
-			get_node("leg_1").rotation.x = -lean * 6.0
+			# Legs swing from the hip and arms counter-swing from the shoulder. With the limbs
+			# pivoting at their own centres this same code produced a shuffle; the joint is the
+			# whole difference between swinging a leg and swinging a stride.
+			get_node("leg_-1").rotation.x = lean * 6.4
+			get_node("leg_1").rotation.x = -lean * 6.4
+			get_node("arm_-1").rotation.x = -lean * 4.6
+			get_node("arm_1").rotation.x = lean * 4.6
 		body.rotation.x = clampf(_speed_ratio * 0.22, 0.0, 0.22)
 
 	var want := global_position + velocity * delta

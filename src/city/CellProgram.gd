@@ -697,16 +697,54 @@ static func gate(ctx: ChunkCtx, c: Vector2, ax: Vector2, w: float, h: float) -> 
 			Vector3(w * 0.8, 0.5, 0.95), Color(1.0, 0.78, 0.48))
 
 
+## 悬铃木 — Shanghai's street tree, and the silhouette is a fact about the city rather than a
+## style choice: the avenues pollard them, so a clean bole climbs out of the pavement, then a
+## small number of thick forks carry a blocky crown. Trunk-plus-two-spheres reads as a lollipop
+## and is the loudest "this came from a kit" tell in the near field, which is why the trunk now
+## has a root flare, a pollard knob, three forks, and a crown of clusters in three tones.
+##
+## Cost is bounded by `ctx.detail`: the low tier keeps the flare, bole and two clusters, so the
+## shape that makes it read as a tree survives and only the breakup goes away.
 static func tree(ctx: ChunkCtx, c: Vector2, scale: float, r: float) -> void:
 	var s := clampf(scale, 0.45, 2.3)
-	ctx.props.cylinder(Transform3D(Basis.IDENTITY, Vector3(c.x, 0.0, c.y)),
-		0.17 * s, 0.12 * s, 2.5 * s, col(CODE_GROUND, Color(0.23, 0.165, 0.115)), 5, false)
-	var leaf := Color(0.135, 0.255, 0.105) if r < 0.7 else Color(0.245, 0.325, 0.125)
-	leaf.a = CODE_GRASS
-	var xf := Transform3D(Basis.IDENTITY, Vector3(c.x, 2.2 * s, c.y))
-	ctx.props.ellipsoid(xf, Vector3(1.75 * s, 1.55 * s, 1.75 * s), leaf, 4, 6)
-	ctx.props.ellipsoid(xf.translated(Vector3(0.75 * s, 0.95 * s, -0.35 * s)),
-		Vector3(1.2 * s, 1.0 * s, 1.2 * s), leaf, 4, 6)
+	var base := Vector3(c.x, 0.0, c.y)
+	var bole := 2.75 * s
+	var bark := col(CODE_GROUND, Color(0.285, 0.225, 0.17).darkened(0.30 * r))
+	# Root flare: without it the trunk meets the ground as a mathematical line, and every tree
+	# on the block looks planted yesterday.
+	ctx.props.cylinder(Transform3D(Basis.IDENTITY, base), 0.26 * s, 0.175 * s, 0.42 * s,
+		bark, 5, false)
+	ctx.props.cylinder(Transform3D(Basis.IDENTITY, base + Vector3(0, 0.40 * s, 0)),
+		0.175 * s, 0.125 * s, bole - 0.40 * s, bark, 5, false)
+	var head := base + Vector3(0, bole, 0)
+	var yaw0 := TAU * r
+	ctx.props.cylinder(Transform3D(Basis.IDENTITY.rotated(Vector3.UP, yaw0), head),
+		0.135 * s, 0.10 * s, 0.26 * s, bark, 5, false)
+	var forks := 3 if ctx.detail else 2
+	for k in forks:
+		var rot := Basis.IDENTITY.rotated(Vector3.UP, yaw0 + TAU * float(k) / float(forks)) \
+			.rotated(Vector3.RIGHT, 0.52 + 0.10 * GameGlobals.hash2(k, int(c.x), 71))
+		ctx.props.cylinder(Transform3D(rot, head), 0.075 * s, 0.042 * s, 1.35 * s, bark, 4, false)
+	# Clusters sit at the fork tips plus one crown centre, and they are deliberately not equal:
+	# three tones, a lit top, and a per-tree jitter so an avenue of forty of them is forty shapes.
+	var dark := col(CODE_GRASS, Color(0.085, 0.165, 0.062))
+	var mid := col(CODE_GRASS, Color(0.135, 0.245, 0.098))
+	var lit := col(CODE_GRASS, Color(0.245, 0.325, 0.135) if r > 0.62
+		else Color(0.185, 0.285, 0.105))
+	ctx.props.ellipsoid(Transform3D(Basis.IDENTITY, head + Vector3(0, 0.95 * s, 0)),
+		Vector3(1.30 * s, 0.95 * s, 1.30 * s), mid, 3, 6)
+	for k in forks:
+		var a := yaw0 + TAU * float(k) / float(forks)
+		var o := Vector3(cos(a), 0.0, -sin(a)) * 0.92 * s
+		var jit := GameGlobals.hash2(k, int(c.y), 72)
+		ctx.props.ellipsoid(Transform3D(Basis.IDENTITY,
+			head + o + Vector3(0, 1.30 * s + jit * 0.35 * s, 0)),
+			Vector3(0.92 * s, 0.78 * s, 0.92 * s), dark if k == 0 else lit, 3, 6)
+	if ctx.detail:
+		var up := GameGlobals.hash2(7, int(c.x) + int(c.y), 73)
+		ctx.props.ellipsoid(Transform3D(Basis.IDENTITY,
+			head + Vector3((up - 0.5) * 1.1 * s, 2.05 * s, (up - 0.5) * 0.9 * s)),
+			Vector3(0.72 * s, 0.60 * s, 0.72 * s), lit, 3, 5)
 
 
 static func parked_car(ctx: ChunkCtx, c: Vector2, ax: Vector2, r: float) -> void:

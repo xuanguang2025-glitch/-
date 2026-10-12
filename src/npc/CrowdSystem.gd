@@ -9,15 +9,36 @@ extends Node3D
 ##   tier 1  < 460 m  navigation and planning only, needs frozen
 ##   tier 2  beyond   no individual at all — PopulationSystem's district census covers it
 ##
-## Two poses stand in for a walk cycle: splitting the crowd across two instances and
-## alternating by stride phase reads as walking at the distances crowds are seen at.
+## A pedestrian is four poses deep and each one is picked by that person's own stride phase, so a
+## crowd of four hundred does not walk in lockstep. See STRIDE_POSES below for why this is a
+## per-agent quantity and not a clock.
 
 const SIDEWALK := 1.35
 const SPAWN_RADIUS := 260.0
-const POSE_HZ := 1.45
 const TIER0 := 70.0
 const TIER1 := 460.0
 const ARRIVE_R := 115.0
+
+## Four poses per stride, selected by each agent's own accumulated gait phase rather than by a
+## global clock. The previous version swapped two poses for the whole crowd on one timer, so every
+## pedestrian on screen moved their legs at the same instant - which is not "walking at crowd
+## distance", it is a marching band. Per-agent phase also lets stride rate follow walking speed,
+## so a commuter's legs actually move faster than a stroller's while both keep the same stride.
+const STRIDE_POSES := 4
+## Gait advance per metre per second of travel: 2.9 poses/s at 1.3 m/s is ~0.95 stride cycles a
+## second, which is a normal adult cadence, and the same constant makes an exercised agent's legs
+## turn over faster without anyone tuning a second number.
+const GAIT_PER_MPS := 2.9
+
+## [left leg, left knee, right leg, right knee, left arm, right arm] in radians.
+## Legs swing about the hip; the knee angle is how far the shin trails the thigh, so a bent knee
+## on the back leg is the push-off and on the forward leg is the heel strike.
+const PHASE := [
+	[0.40, 0.06, -0.40, 0.34, -0.30, 0.30],
+	[0.06, 0.02, 0.36, 0.72, -0.04, -0.32],
+	[-0.40, 0.34, 0.40, 0.06, 0.30, -0.30],
+	[0.36, 0.72, 0.06, 0.02, -0.32, -0.04],
+]
 
 var agents: Array = []
 var pinned: Array = []		# player-created residents; never subject to the budget
@@ -29,8 +50,7 @@ var pop: PopulationSystem
 var hour: float = 9.0
 var rain: float = 0.0
 
-var _pose_a: MultiMeshInstance3D
-var _pose_b: MultiMeshInstance3D
+var _poses: Array = []		# one MultiMeshInstance3D per stride phase
 var _rng := RandomNumberGenerator.new()
 var _hidden: int = 0
 var _next_id: int = 1
@@ -39,10 +59,10 @@ var _next_id: int = 1
 func _ready() -> void:
 	add_to_group("crowd")
 	_rng.seed = 0xC0FFEE
-	_pose_a = _make_pose(0)
-	_pose_b = _make_pose(1)
-	add_child(_pose_a)
-	add_child(_pose_b)
+	for p in STRIDE_POSES:
+		var mi := _make_pose(p)
+		_poses.append(mi)
+		add_child(mi)
 	pop = get_tree().get_first_node_in_group("population")
 	sim = get_tree().get_first_node_in_group("sim")
 
@@ -63,25 +83,64 @@ func _make_pose(pose: int) -> MultiMeshInstance3D:
 	return mi
 
 
+## A hanging segment. `MeshFusion.box` grows upward from its origin, so a limb that drops toward
+## the ground is the same box rotated pi about X - and measuring the angle from there means a swing
+## of 0 is straight down, positive is forward, and the joint arithmetic below stays legible.
+static func _hang(from: Vector3, ang: float) -> Transform3D:
+	return Transform3D(Basis.IDENTITY.rotated(Vector3.RIGHT, PI - ang), from)
+
+
+static func _tip(from: Vector3, ang: float, len: float) -> Vector3:
+	return from + Vector3(0.0, -cos(ang) * len, sin(ang) * len)
+
+
+static func _col(r: float, g: float, b: float) -> Color:
+	var c := Color(r, g, b)
+	c.a = 0.0
+	return c
+
+
+## One limb, two segments, one joint. The single-box-per-limb version this replaced kept the knee
+## and elbow straight through every phase of the step, so the pedestrian read as a gliding
+## mannequin; at crowd distance the silhouette is the whole read, and a bending joint is most of it.
+static func _limb(f: MeshFusion, root: Vector3, a0: float, a1: float, l0: float, l1: float,
+		w: float, d: float, c0: Color, c1: Color) -> void:
+	f.box(_hang(root, a0), Vector3(w, l0, d), c0)
+	var mid := _tip(root, a0, l0)
+	f.box(_hang(mid, a1), Vector3(w * 0.86, l1, d * 0.86), c1)
+
+
+## The body, built for one of four stride phases. Two-segment legs with a foot, two-segment arms
+## swinging opposite to their own side's leg, and a hair cap, because a crowd of heads with no
+## hair reads as a crowd of balls.
 static func _human_mesh(pose: int) -> ArrayMesh:
 	var f := MeshFusion.new()
-	var skin := Color(0.78, 0.62, 0.52)
-	skin.a = 0.0
-	var coat := Color(0.55, 0.55, 0.58)
-	coat.a = 0.0
-	var trouser := Color(0.22, 0.22, 0.26)
-	trouser.a = 0.0
-	f.ellipsoid(Transform3D(Basis.IDENTITY, Vector3(0, 1.60, 0)),
-		Vector3(0.115, 0.13, 0.115), skin, 5, 7)
-	f.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.96, 0)),
-		Vector3(0.40, 0.66, 0.24), coat)
-	var swing := 0.20 if pose == 0 else -0.20
+	var ph: Array = PHASE[pose % PHASE.size()]
+	var skin := _col(0.78, 0.62, 0.52)
+	var coat := _col(0.55, 0.55, 0.58)
+	var trouser := _col(0.22, 0.22, 0.26)
+	var dark := _col(0.115, 0.115, 0.135)
+	f.ellipsoid(Transform3D(Basis.IDENTITY, Vector3(0, 1.585, 0)),
+		Vector3(0.105, 0.125, 0.105), skin, 4, 6)
+	f.ellipsoid(Transform3D(Basis.IDENTITY, Vector3(0, 1.648, -0.010)),
+		Vector3(0.108, 0.072, 0.108), dark, 2, 6)
+	## Chest and pelvis in different tones: one box for the whole trunk erases the waist, and the
+	## waist is where the eye decides a shape is a person.
+	f.box(Transform3D(Basis.IDENTITY, Vector3(0, 1.055, 0)), Vector3(0.375, 0.40, 0.225), coat)
+	f.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.875, 0)), Vector3(0.325, 0.185, 0.205), trouser)
 	for s in [-1, 1]:
-		var off := swing * float(s)
-		f.box(Transform3D(Basis.IDENTITY, Vector3(0.19 * s, 0.98, off * 0.45)),
-			Vector3(0.11, 0.60, 0.11), coat)
-		f.box(Transform3D(Basis.IDENTITY, Vector3(0.10 * s, 0.36, off)),
-			Vector3(0.14, 0.72, 0.15), trouser)
+		var leg := float(ph[0]) if s < 0 else float(ph[2])
+		var knee := float(ph[1]) if s < 0 else float(ph[3])
+		var hip := Vector3(0.085 * s, 0.90, 0.0)
+		_limb(f, hip, leg, leg - knee, 0.44, 0.42, 0.15, 0.165, trouser, trouser)
+		var ankle := _tip(hip, leg - knee, 0.42)
+		f.box(Transform3D(Basis.IDENTITY, ankle + Vector3(0, -0.055, 0.055)),
+			Vector3(0.105, 0.055, 0.235), dark)
+		var arm := float(ph[4]) if s < 0 else float(ph[5])
+		var sh := Vector3(0.185 * s, 1.425, 0.0)
+		_limb(f, sh, arm, arm - 0.34, 0.295, 0.265, 0.108, 0.115, coat, coat)
+		f.box(Transform3D(Basis.IDENTITY, _tip(sh, arm - 0.34, 0.265)),
+			Vector3(0.085, 0.075, 0.09), skin)
 	return f.commit()
 
 
@@ -114,10 +173,12 @@ func _process(delta: float) -> void:
 		agents.append(ag)
 	while agents.size() > want:
 		agents.pop_back()
-	var ta: Array[Transform3D] = []
-	var tb: Array[Transform3D] = []
-	var ca: Array[Color] = []
-	var cb: Array[Color] = []
+	# One bucket per stride phase; the phase is the agent's own, so no two people share a beat.
+	var xforms: Array = []
+	var cols: Array = []
+	for p in STRIDE_POSES:
+		xforms.append([])
+		cols.append([])
 	_hidden = 0
 	for li in 2:
 		# Budget agents and player-created ones are stepped and drawn by the same code; the
@@ -129,21 +190,10 @@ func _process(delta: float) -> void:
 			if ag["hidden"]:
 				_hidden += 1
 				continue
-			var xform := _transform(ag)
-			if int(prof.id) % 2 == 0:
-				ta.append(xform)
-				ca.append(ag["col"])
-			else:
-				tb.append(xform)
-				cb.append(ag["col"])
-	# Stride phase picks the pose, so a crowd does not march in lockstep.
-	var swap := int(Time.get_ticks_msec() / (1000.0 / POSE_HZ)) % 2
-	if swap == 1:
-		_flush(_pose_a, tb, cb)
-		_flush(_pose_b, ta, ca)
-	else:
-		_flush(_pose_a, ta, ca)
-		_flush(_pose_b, tb, cb)
+			xforms[int(ag["gait"]) % STRIDE_POSES].append(_transform(ag))
+			cols[int(ag["gait"]) % STRIDE_POSES].append(ag["col"])
+	for p in STRIDE_POSES:
+		_flush(_poses[p], xforms[p], cols[p])
 
 
 func _flush(inst: MultiMeshInstance3D, list: Array, cols: Array) -> void:
@@ -182,6 +232,7 @@ func _step(ag: Dictionary, delta: float) -> void:
 	var seg := b - a
 	var l := maxf(seg.length(), 0.001)
 	var dir := seg / l
+	ag["gait"] = int(float(ag.get("gait", 0.0)) + float(ag["speed"]) * delta * GAIT_PER_MPS)
 	## Phase 257: a corner everybody wants is a corner that moves slowly, and the crowd is what
 	## makes it wanted. Read at the position they are leaving from, then published at the one they
 	## reached, so nobody is slowed by a crush that only their own step created.
@@ -293,6 +344,7 @@ func _place(ag: Dictionary, center: Vector2, radius: float) -> bool:
 		ag["tier"] = 1
 		ag["plan_t"] = _rng.randf() * 0.6
 		ag["sway"] = _rng.randf_range(-0.22, 0.22)
+		ag["gait"] = _rng.randi_range(0, STRIDE_POSES - 1)
 		ag["hidden"] = false
 		var c := OccupationTable.dress_color(prof.occ, _rng)
 		c.a = 0.0
@@ -318,6 +370,7 @@ func _park(ag: Dictionary) -> void:
 	ag["speed"] = 1.3
 	ag["tier"] = 2
 	ag["sway"] = 0.0
+	ag["gait"] = 0
 	ag["hidden"] = true
 	ag["pos"] = Vector2(focus.x, focus.z) + Vector2(9000.0, 9000.0)
 	ag["dir"] = Vector2.UP
@@ -396,9 +449,18 @@ func nearest() -> Dictionary:
 	return _near_cache
 
 
+
+## Drawn across all four stride instances.
+func _drawn() -> int:
+	var n := 0
+	for mi in _poses:
+		n += (mi as MultiMeshInstance3D).multimesh.instance_count
+	return n
+
+
 func stats() -> Dictionary:
 	var n := nearest()
-	var drawn := _pose_a.multimesh.instance_count + _pose_b.multimesh.instance_count
+	var drawn := _drawn()
 	var t0 := 0
 	for ag in agents:
 		if ag.get("tier", 2) == 0:
