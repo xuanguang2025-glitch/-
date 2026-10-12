@@ -32,6 +32,8 @@ STRESS_OBJECTS=1000       # Phase 37 test 3
 SIM_SOAK_HOURS=8760       # one simulated year, ~2.7 s of wall clock
 MAX_SIM_HOUR_MS=1.0
 MIN_SIM_ASSERTS=25        # dropping an assertion must fail the gate, not quietly raise the average
+# Part 12: 城市生命层（人口队列 / 个体消费入账 / 出行需求与拥堵 / 状态驱动新闻）。
+MIN_LIFE_ASSERTS=30       # 实测 49 条；低于此门槛说明城市生命层有一块不再被验证
 MIN_MENU_ASSERTS=10       # Phase 122/123: the menu is driven through choose()/set_quality(), not clicks
 MIN_MP_ASSERTS=16         # 10b: two real clients; replication rendered, economy server-owned
 SIM_LIVE_MIN_HOURS=1      # a real session crossing an hour boundary must tick the economy

@@ -137,6 +137,23 @@ func pick_job(zone: String, from_home: Vector2, _rnd: RandomNumberGenerator) -> 
 	return _pick_anchored(pool, from_home, _rng, 22)
 
 
+## Phase 251's candidate set: the retail sites a person near `anchor` could realistically walk
+## to, sampled the same way `resolve` picks one. Consumer scoring needs several options to choose
+## between; `resolve` deliberately returns a single answer, so this is the comparison form.
+func sample_retail(anchor: Vector2, n: int) -> Array:
+	var out: Array = []
+	if retail.is_empty():
+		return out
+	var cand: Array = []
+	for k in mini(14, retail.size()):
+		cand.append(retail[_rng.randi_range(0, retail.size() - 1)])
+	cand.sort_custom(func(a, b):
+		return Vector2(a["p"]).distance_squared_to(anchor) < Vector2(b["p"]).distance_squared_to(anchor))
+	for k in mini(n, cand.size()):
+		out.append({"p": Vector2(cand[k]["p"]), "d": String(cand[k]["d"])})
+	return out
+
+
 func resolve(kind: String, hint: Vector2) -> Vector2:
 	match kind:
 		"home":

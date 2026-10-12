@@ -112,6 +112,13 @@ grep -q "city simulation self-test: PASS" "$LOGDIR/sim.log" \
 SA=$(count_pat '^\[test\] PASS' "$LOGDIR/sim.log")
 require "模拟断言数" "$SA"
 [ "$SA" -ge "$MIN_SIM_ASSERTS" ] || die "城市模拟断言仅 $SA 条（门槛 $MIN_SIM_ASSERTS）"
+# Part 12: the living city is a separate contract with its own count, so deleting the population
+# layer cannot be hidden by the economy's assertions still passing on their own.
+grep -q "city life self-test: PASS" "$LOGDIR/sim.log" \
+  || { grep "^\[life\] FAIL" "$LOGDIR/sim.log" | head -8; die "城市生命自测"; }
+LA=$(count_pat '^\[life\] PASS' "$LOGDIR/sim.log")
+require "城市生命断言数" "$LA"
+[ "$LA" -ge "$MIN_LIFE_ASSERTS" ] || die "城市生命断言仅 $LA 条（门槛 $MIN_LIFE_ASSERTS）"
 "$GODOT" --path . --resolution 1280x720 -- "--sim-soak=$SIM_SOAK_HOURS" --spawn=1150,300 \
   >"$LOGDIR/soak.log" 2>&1
 SOAK_LINE=$(grep -E '^\[soak\] hours' "$LOGDIR/soak.log")

@@ -35,6 +35,53 @@ var mood: float = 0.6
 
 var income: float = 0.0
 
+## --- Part 12: the parts of a person that make two of them different ------------------
+## Phase 239's personality vector. Six axes, all 0..1, rolled once at creation and never
+## re-rolled. They exist because without them the plan, the walk and the purchase of an office
+## worker are a function of the clock alone, and every 白领 on 南京路 would do the same thing at
+## the same minute. With them, 工作狂 stays late, 外向 turns out in the evening whatever the
+## weather does, and 消费欲 decides which shop a hungry person is willing to walk further for.
+var personality: Dictionary = {}
+## Phase 238's remaining identity fields. `education` and `seniority` index the same tables the
+## cohort model uses, so a named person and the district statistic they came from agree.
+var education: int = 1
+var seniority: int = 1
+var household: int = 3
+## Phase 268: ids of the people this one actually knows, for as long as the build can name them.
+var friends: Array = []
+## Real cents in this pocket. Credited by ConsumerAI out of the district's wage bill and spent at
+## a counter. `money` above stays the 0..1 need it always was; this is the balance, in integer
+## cents, in the ledger's fourth bucket.
+var purse_c: int = 0
+var income_hour_c: int = 0
+var buys: int = 0
+var spent_c: int = 0
+var last_buy_hidx: int = -1
+
+
+## Phase 240's visible stage of life, derived from age rather than stored, so it cannot disagree.
+func life_stage() -> String:
+	if age < 6:
+		return "幼年"
+	if age < 18:
+		return "中学"
+	if age < 23:
+		return "大学或初入职场"
+	if age < 40:
+		return "职业上升"
+	if age < 60:
+		return "资深在职"
+	return "退休"
+
+
+func stage_label() -> String:
+	var st: Array = VirtualPopulation.STAGES
+	return String(st[clampi(seniority, 0, st.size() - 1)])
+
+
+func persona(key: String) -> float:
+	return float(personality.get(key, 0.5))
+
 
 static func create(pid: int, rnd: RandomNumberGenerator, pop: PopulationSystem,
 		near: Vector2) -> NPCProfile:
@@ -56,9 +103,119 @@ static func create(pid: int, rnd: RandomNumberGenerator, pop: PopulationSystem,
 		p.work = pop.pick_job(OccupationTable.zone(p.occ), p.home, rnd)
 	else:
 		p.work = p.home
+	p.income_hour_c = int(p.income * 100.0 / 730.0)
+	p.personality = _personality(p.occ, p.age, rnd)
+	p.education = _education(p.occ, p.age, rnd)
+	p.seniority = _seniority(p.occ, p.age, p.education, rnd)
+	p.household = 1 + rnd.randi_range(2, 4)
 	p.plan(rnd.randf() * 24.0, 0.0, pop)
 	p._sync_goal(pop)
 	return p
+
+
+## Phase 239, as data: an occupation starts with a disposition and a life stage narrows it. A
+## 65-year-old 退休 is not a 30-year-old 白领 with a different schedule, and the vector is where
+## that shows up before any behaviour is derived from it.
+static func _personality(occ: int, age: int, rnd: RandomNumberGenerator) -> Dictionary:
+	var base := {"extravert": 0.5, "rational": 0.5, "thrill": 0.5, "spend": 0.5,
+		"workaholic": 0.5, "social": 0.5}
+	match occ:
+		OccupationTable.Occ.OFFICE, OccupationTable.Occ.ENGINEER:
+			base["workaholic"] = 0.66
+			base["rational"] = 0.62
+		OccupationTable.Occ.SHOPKEEPER, OccupationTable.Occ.FREELANCE:
+			base["extravert"] = 0.68
+			base["spend"] = 0.58
+		OccupationTable.Occ.STUDENT:
+			base["thrill"] = 0.72
+			base["social"] = 0.70
+			base["spend"] = 0.34
+		OccupationTable.Occ.DOCTOR, OccupationTable.Occ.POLICE:
+			base["workaholic"] = 0.72
+			base["rational"] = 0.68
+		OccupationTable.Occ.DRIVER, OccupationTable.Occ.WORKER, OccupationTable.Occ.CLEANER, \
+		OccupationTable.Occ.GUARD:
+			base["spend"] = 0.40
+			base["rational"] = 0.56
+		OccupationTable.Occ.RETIRED:
+			base["social"] = 0.66
+			base["workaholic"] = 0.20
+			base["thrill"] = 0.26
+		OccupationTable.Occ.TOURIST:
+			base["thrill"] = 0.80
+			base["spend"] = 0.72
+	if age > 55:
+		base["thrill"] = float(base["thrill"]) * 0.6
+		base["spend"] = float(base["spend"]) * 0.8
+	elif age < 25:
+		base["rational"] = float(base["rational"]) * 0.75
+	for k in base.keys():
+		base[k] = clampf(float(base[k]) + rnd.randf_range(-0.14, 0.14), 0.05, 0.95)
+	return base
+
+
+## 0 = 初中及以下, 1 = 高中/中职, 2 = 大专以上. Correlated with occupation the same way the
+## cohort layer's education mix is, so a named 医生 and the district's doctor cohort agree.
+static func _education(occ: int, age: int, rnd: RandomNumberGenerator) -> int:
+	var hi := 0.12
+	match occ:
+		OccupationTable.Occ.OFFICE, OccupationTable.Occ.ENGINEER, OccupationTable.Occ.FREELANCE:
+			hi = 0.72
+		OccupationTable.Occ.DOCTOR, OccupationTable.Occ.TEACHER:
+			hi = 0.88
+		OccupationTable.Occ.STUDENT:
+			hi = 0.34 if age < 15 else 0.52
+		OccupationTable.Occ.DRIVER, OccupationTable.Occ.WORKER, OccupationTable.Occ.CLEANER, \
+		OccupationTable.Occ.GUARD:
+			hi = 0.10
+		OccupationTable.Occ.RETIRED:
+			hi = 0.16
+	var r := rnd.randf()
+	if r < hi:
+		return 2
+	return 1 if r < hi + 0.46 else 0
+
+
+## Phase 246's starting rung. Education shortens the time to the top, and age is the clock that
+## actually ran, not a random draw — a 58-year-old 员工 with a 高中 diploma is a real person, and
+## so is a 26-year-old 主管 at a startup.
+static func _seniority(occ: int, age: int, edu: int, rnd: RandomNumberGenerator) -> int:
+	if not OccupationTable.is_worker(occ) or occ == OccupationTable.Occ.STUDENT \
+			or occ == OccupationTable.Occ.TOURIST:
+		return 0
+	var years := clampi(age - 22 - (2 if edu == 2 else 0), 0, 40)
+	var p := 0.020 + 0.012 * float(edu)
+	var s := 0
+	for k in years:
+		if rnd.randf() < p:
+			s += 1
+			p *= 0.68
+	return clampi(s, 0, 4)
+
+
+## What this person contributes to the district rent bill, in cents per simulated hour. Retired
+## and students pay too, because households pay rent rather than paycheques; a tourist pays
+## nothing here because their lodging is already booked as 休闲 spending.
+##
+## It is a *share*, not a second charge: CitySim's district-level rent is the whole bill, and the
+## ConsumerAI settles each named resident's slice of it against the household bucket they are
+## counted in, so the total the landlord receives stays the number the economy was given.
+func hourly_rent_c() -> int:
+	if occ == OccupationTable.Occ.TOURIST:
+		return 0
+	if income_hour_c <= 0:
+		return 60 + int(float(seniority) * 20.0)
+	var share := 0.42
+	if occ == OccupationTable.Occ.CLEANER or occ == OccupationTable.Occ.GUARD \
+			or occ == OccupationTable.Occ.DRIVER or occ == OccupationTable.Occ.WORKER:
+		share = 0.52
+	elif occ == OccupationTable.Occ.STUDENT:
+		share = 0.12
+	elif occ == OccupationTable.Occ.RETIRED:
+		share = 0.28
+	elif occ == OccupationTable.Occ.FREELANCE:
+		share = 0.36
+	return maxi(20, int(income_hour_c * share))
 
 
 ## Resolve the day plan for an hour of the day. Returns the goal class the crowd should

@@ -50,6 +50,11 @@ var time_of_day: float = 17.4       # start in golden hour, dusk lights kick in
 var time_scale: float = 1.0
 var weather_kind: int = Weather.CLEAR
 var weather_intensity: float = 0.0
+## Part 12's living-city readout, written once per simulated hour by CityLife and read by the HUD.
+## It lives here rather than on CitySim because CitySim must not name the layer that subscribes to
+## it - that edge is a compile-time class cycle - and the HUD already takes time and weather from
+## this autoload rather than from a second source.
+var life: Dictionary = {}
 var cash: float = 250000.0
 var discovered: Dictionary = {}
 

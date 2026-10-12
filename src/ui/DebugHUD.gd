@@ -70,9 +70,21 @@ func feed(delta: float, s: Dictionary) -> void:
 		float(cars.get("rush", 0.0)) * 100.0])
 	var sm: Dictionary = s.get("sim", {})
 	if not sm.is_empty():
-		lines.append("城市模拟 第%d天 %d时   商铺 %d   就业 %d   货币 %.0f亿" % [
+		lines.append("城市模拟 第%d天 %d时   商铺 %d   就业 %d   货币 %.0f亿   拥堵 %.2f" % [
 			sm.get("day", 1), sm.get("hours", 0), sm.get("shops", 0),
-			sm.get("employed", 0), float(sm.get("money", 0)) / 10000000000.0])
+			sm.get("employed", 0), float(sm.get("money", 0)) / 10000000000.0,
+			float(sm.get("congestion", 0.0))])
+	## Part 12's living city, read from the slot the life layer writes each hour rather than from
+	## the ledger: the economy must not have to know who is subscribing to it, and a readout wired
+	## to a system that cannot reach it would be the decorative kind. Empty means not mounted, and
+	## then it is simply not claimed.
+	var lf: Dictionary = GameGlobals.life
+	if not lf.is_empty():
+		lines.append("虚拟人口 %s   模拟第 %d 天   晋升 %d 人次   消费 %d 笔" % [
+			_k(int(lf["residents"])), int(lf["days"]), int(lf["promoted"]), int(lf["purchases"])])
+		var head := String(lf.get("head", ""))
+		if head != "":
+			lines.append("新闻：%s" % head)
 	var who: Dictionary = npc.get("who", {})
 	if not who.is_empty():
 		var prof: NPCProfile = who["prof"]

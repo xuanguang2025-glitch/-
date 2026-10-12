@@ -182,8 +182,14 @@ func _step(ag: Dictionary, delta: float) -> void:
 	var seg := b - a
 	var l := maxf(seg.length(), 0.001)
 	var dir := seg / l
-	ag["t"] = float(ag["t"]) + float(ag["speed"]) * delta / l
+	## Phase 257: a corner everybody wants is a corner that moves slowly, and the crowd is what
+	## makes it wanted. Read at the position they are leaving from, then published at the one they
+	## reached, so nobody is slowed by a crush that only their own step created.
+	var slow := sim.slow_at(ag["pos"]) if sim != null else 1.0
+	ag["t"] = float(ag["t"]) + float(ag["speed"]) * delta * slow / l
 	ag["pos"] = a.lerp(b, clampf(ag["t"], 0.0, 1.0)) + Vector2(-dir.y, dir.x) * float(ag["side"])
+	if sim != null:
+		sim.publish_walk(ag["pos"], delta)
 	ag["dir"] = dir
 	ag["hidden"] = false
 	if ag["t"] >= 1.0:

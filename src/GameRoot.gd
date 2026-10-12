@@ -215,6 +215,7 @@ func _ready() -> void:
 		rig.wet_factor,
 		func(h: float) -> float: return population.active_share(h))
 	sim.bootstrap(population)
+	LifeMount.mount(self, sim, population)		# Part 12: 人口/消费/新闻，订阅 sim.ticked
 	print("[sim] %s" % str(sim.stats()))
 
 	crowd = CrowdSystem.new()

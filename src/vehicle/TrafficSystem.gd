@@ -183,6 +183,13 @@ func _step(car: Dictionary, delta: float) -> void:
 	var dir := seg / l
 	car["dir"] = dir
 	var cruise: float = car["cruise"] * (1.0 - 0.3 * wet)
+	if sim != null:
+		## Phase 257, the driving half: congestion is measured from the trips every car and every
+		## pedestrian on this street is currently making, so a jam is caused by traffic rather than
+		## applied to it. Queueing ahead (the gap check) is one vehicle waiting for another; this is
+		## the whole street being wanted, which is the part that makes a ring road crawl.
+		cruise *= sim.slow_at(car["pos"])
+		sim.publish_drive(car["pos"], delta)
 	var target_speed := cruise
 	# Queue behind whatever is in front, and crawl through the heaviest rush hour.
 	var gap: float = car["gap"]

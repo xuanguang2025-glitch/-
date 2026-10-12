@@ -17,7 +17,13 @@ extends Node
 ##   landlord  --spend-->            --rent --> landlord
 ##   business  --profit share------> household
 ##   household --rent--------------> landlord
+##   household --wage in hand------> residents --lunch------> business
 ##   business retained earnings may go negative; that is debt, and it is what closes a shop.
+##
+## The residents bucket is Part 12's addition and is the only one with a name attached to each
+## cent: an NPC's purse. It exists so an individual's need can move money a shop can feel, and it
+## is counted in money_total() for exactly the same reason as the other three — so that the gate
+## which proves nothing is invented or lost has to be true of a single person's lunch too.
 ##
 ## Demand comes from balances, and the surplus above each shop's reserve returns to the
 ## households who spend it. Both matter: an earlier version paid wages out of nowhere and let
@@ -74,12 +80,25 @@ var hours_run := 0
 var day := 1
 var districts: Dictionary = {}	# name -> state
 var events: Array = []			# recent open/close records (Phase 98)
+## Total events ever emitted, including the ones the ring buffer has dropped. Readers that watch
+## for new records must use this, not `events.size()`.
+var event_seq := 0
 var seed_base := 20260928
 var _rng := RandomNumberGenerator.new()
 var _streak: Dictionary = {}
 var _clock: Callable = func() -> float: return 9.0
 var _rain: Callable = func() -> float: return 0.0
 var _share: Callable = func(_h: float) -> float: return 0.5
+## Phase 256/257's trip field, owned here because the street systems already resolve this node
+## by group. It deliberately does NOT hold the population, consumption or news layers: CitySim
+## naming CityLife would close a class cycle (CityLife -> CitySim -> CityLife), and GDScript
+## cannot compile one - the economy used to build its own life layer and the whole project failed
+## to parse. The living layers subscribe to `ticked` instead, from LifeMount.
+var trips := TripDemand.new()
+## Counters over the session, so the HUD and the tests can tell an individual economy that ran
+## from one that was wired up but never used. Not ledger buckets: these are tallies.
+var wages_handed_c := 0
+var individual_spend_c := 0
 
 
 ## Consumers (crowd, traffic) resolve this by group rather than by an assignment in
@@ -122,15 +141,21 @@ func bootstrap(pop: PopulationSystem) -> void:
 			var per: float = 900.0 if c == "food" else 1400.0 if c == "retail" \
 				else 2600.0 if c == "leisure" else 1800.0
 			shops[c] = {"count": maxi(1, int(people / per)), "price_c": int(wage / 40),
-				"bank_c": people * int(wage) / 20, "last_profit_c": 0, "util": 0.6}
+				"bank_c": people * int(wage) / 20, "last_profit_c": 0, "util": 0.6,
+				"i_rev_c": 0, "i_buys": 0}
+		## Named residents start with cash in their pockets. It is a transfer out of the
+		## household bucket, not an extra endowment: money_total() is the same figure with or
+		## without this line, which is the only reason the purchase gate can be trusted.
+		var purse: int = int(people * wage * 2)
 		districts[n] = {
 			"pop": people,
 			"labor": int(people * 0.62),
 			"employed": 0,
 			"wage_c": wage,
 			"rent_c": int(wage / 22),
-			"house_c": people * wage * 30,
+			"house_c": people * wage * 30 - purse,
 			"land_c": people * wage * 4,
+			"resident_c": purse,
 			"shops": shops,
 			"stress": 0.25,
 			"footfall": int(round(float(people) * share)),
@@ -173,6 +198,10 @@ func advance_hour() -> void:
 	for n in names:
 		_step(districts[n], n, rain, share)
 	reconcile_jobs()
+	## Part 12: `ticked` is the seam. The living layers (population, consumption, news) subscribe
+	## here rather than being owned here, so one clock drives everything and the class graph stays
+	## acyclic. The trip field is decayed per frame by whoever is mounted, not here: an hour of
+	## elapsed sim time is not a second of wall clock, and the crush is a live quantity.
 	ticked.emit()
 
 
@@ -237,11 +266,20 @@ func _market(d: Dictionary, name: String, c: String, spend: int) -> void:
 	var count: int = maxi(1, int(s["count"]))
 	var wages: int = count * int(STAFF_PER_SHOP[c]) * int(d["wage_c"])
 	var rent: int = int(spend * RENT_SHARE)
+	## Named residents' takings are already in the till: `resident_spend` moved them out of the
+	## residents' bucket at the moment of purchase, so here they join only the figures the owner
+	## acts on - profit and utilisation - and must not be added to the bank a second time.
+	var indiv: int = int(s.get("i_rev_c", 0))
+	var buys: int = int(s.get("i_buys", 0))
+	s["i_rev_c"] = 0
+	s["i_buys"] = 0
+	s["i_rev_last_c"] = indiv
+	s["i_buys_last"] = buys
 	s["bank_c"] = int(s["bank_c"]) + spend - wages - rent
 	d["house_c"] = int(d["house_c"]) + wages
 	d["land_c"] = int(d["land_c"]) + rent
 	# Retained earnings may go negative - that debt is what eventually closes the shop.
-	var profit: int = spend - wages - rent
+	var profit: int = spend + indiv - wages - rent
 	s["last_profit_c"] = profit
 	# Profit share: anything a shop holds above a floating reserve of its own wage bill goes
 	# back to the households who will spend it. A loss-making shop burns the reserve instead
@@ -256,7 +294,10 @@ func _market(d: Dictionary, name: String, c: String, spend: int) -> void:
 	## by the price gives units, and that over the shop's hourly throughput is what tells the
 	## owner whether to charge more. Comparing an hourly headcount to a daily capacity, as the
 	## first version did, left every category permanently "empty" and prices never moved.
-	var util := clampf(float(spend) / maxf(float(s["price_c"]) * float(capacity), 1.0), 0.0, 1.6)
+	## Individual purchases are in that numerator, which is the whole point of Part 12: a lunch
+	## rush is supposed to be visible to the person who owns the counter.
+	var util := clampf(float(spend + indiv) / maxf(float(s["price_c"]) * float(capacity), 1.0),
+		0.0, 1.6)
 	s["util"] = util
 	# roundi, not int: truncating a 2 % step at a small price yields the same price (32 * 1.02
 	# is 32.6, and int() of that is 32), so every category sat at its bootstrap price forever
@@ -298,6 +339,11 @@ func _cap(d: Dictionary) -> int:
 func _event(kind: String, district: String, cat: String, count: int) -> void:
 	events.append({"hour": hours_run, "kind": kind, "district": district,
 		"cat": cat, "count": count})
+	## A monotonic sequence behind the ring buffer. Anything that watches for new events by
+	## comparing `events.size()` stops working the moment the buffer fills: the size stays at the
+	## cap forever, and a shop closing becomes invisible to the news desk. This was a real failure,
+	## caught by the Part 12 contract, not a hypothetical.
+	event_seq += 1
 	if events.size() > 200:
 		events.pop_front()
 
@@ -311,6 +357,83 @@ func reconcile_jobs() -> void:
 		for c in CATS:
 			jobs += int(d["shops"][c]["count"]) * int(STAFF_PER_SHOP[c])
 		d["employed"] = clampi(jobs, 0, int(d["labor"]))
+
+
+# --- Part 12: named residents' money --------------------------------------
+## Wages into hands: household bucket -> residents bucket, both of which are inside
+## money_total(). Returns the cents actually moved, which can be fewer than asked for — a bucket
+## that is empty pays nothing, and recording that is the difference between a ledger and a wish.
+func credit_wage(dn: String, cents: int) -> int:
+	if cents <= 0 or not districts.has(dn):
+		return 0
+	var d: Dictionary = districts[dn]
+	var take: int = mini(cents, maxi(0, int(d.get("house_c", 0))))
+	if take <= 0:
+		return 0
+	d["house_c"] = int(d["house_c"]) - take
+	d["resident_c"] = int(d.get("resident_c", 0)) + take
+	wages_handed_c += take
+	return take
+
+
+## A purchase: residents bucket -> that category's till, in the same call, so there is no moment
+## at which the money is in neither. The shop's `i_rev_c` is what the market folds into profit
+## and utilisation at the hour boundary.
+func resident_spend(dn: String, cat: String, cents: int) -> int:
+	if cents <= 0 or not CATS.has(cat) or not districts.has(dn):
+		return 0
+	var d: Dictionary = districts[dn]
+	var take: int = mini(cents, maxi(0, int(d.get("resident_c", 0))))
+	if take <= 0:
+		return 0
+	d["resident_c"] = int(d["resident_c"]) - take
+	var s: Dictionary = d["shops"][cat]
+	s["bank_c"] = int(s["bank_c"]) + take
+	s["i_rev_c"] = int(s.get("i_rev_c", 0)) + take
+	s["i_buys"] = int(s.get("i_buys", 0)) + 1
+	d["shops"][cat] = s
+	individual_spend_c += take
+	return take
+
+
+func resident_total() -> int:
+	var s := 0
+	for n in districts:
+		s += int(districts[n].get("resident_c", 0))
+	return s
+
+
+## What the street systems ask: how much slower is it here, right now, because of how many trips
+## the people and cars in this cell are making. 1.0 when nothing has been published yet, so a
+## world without the life layer behaves exactly as it did before it was added.
+func slow_at(p: Vector2) -> float:
+	return trips.slow_at(p)
+
+
+func congestion_at(p: Vector2) -> float:
+	return trips.congestion_at(p)
+
+
+## Publishing forms, so the crowd and the traffic system keep talking to the one node they already
+## resolve by group instead of having to find a second system. Weights are road-space occupancy: a
+## car, with its gaps and its lane, takes about eight pedestrians' worth of street. Neither number
+## is a knob for how slow traffic should feel - that is `TripDemand.CAP_PER_CELL`'s job, and
+## confusing the two is what once made a busy corner read "congestion 8638".
+##
+## `delta` is required, not convenient: the field integrates presence over time, so publishing
+## without the frame length would make the same crowd read ten times denser at 60 fps than at 6.
+func publish_walk(p: Vector2, delta: float) -> void:
+	trips.publish(p, 1.0, delta)
+
+
+func publish_drive(p: Vector2, delta: float) -> void:
+	trips.publish(p, 8.0, delta)
+
+
+## The wetness the economy was configured with, exposed so a subscriber reports the same rainfall
+## the market reacted to rather than sampling the sky a second time.
+func wet_factor() -> float:
+	return float(_rain.call())
 
 
 ## Phase 104: a player action enters the simulation as supply and demand, not as a direct
@@ -417,18 +540,29 @@ func business_total() -> int:
 	return s
 
 
-## Every bucket in the closed economy. A tick must not change this by even one cent.
+## Every bucket in the closed economy. A tick must not change this by even one cent. The
+## residents bucket is Part 12's fourth one, and it is here for the same reason as the other
+## three: a named person's wallet is money in the city, not money outside it.
 func money_total() -> int:
-	return house_total() + land_total() + business_total()
+	return house_total() + land_total() + business_total() + resident_total()
 
 
+## The hash is what the determinism and rollback gates actually compare, so it has to cover every
+## number the living layers write. Population, labour, wage and rent are now produced by the
+## cohort model rather than frozen at bootstrap, which means a rollback that restored them
+## wrongly would otherwise pass while being wrong.
 func state_hash() -> int:
 	var h := 2166136261
 	for n in _sorted_names():
 		var d: Dictionary = districts[n]
 		h = _mix(h, int(d["house_c"]))
 		h = _mix(h, int(d["land_c"]))
+		h = _mix(h, int(d.get("resident_c", 0)))
 		h = _mix(h, int(d["employed"]))
+		h = _mix(h, int(d["pop"]))
+		h = _mix(h, int(d["labor"]))
+		h = _mix(h, int(d["wage_c"]))
+		h = _mix(h, int(d["rent_c"]))
 		h = _mix(h, int(round(float(d["stress"]) * 1000.0)))
 		for c in CATS:
 			var s: Dictionary = d["shops"][c]
@@ -452,10 +586,15 @@ static func _mix(h: int, v: int) -> int:
 
 # --- Phase 110/111: persistence, snapshots, rollback ------------------------
 func snapshot() -> Dictionary:
-	return {"version": 1, "hours_run": hours_run, "day": day, "seed": seed_base,
-		"districts": districts.duplicate(true), "events": events.slice(-50)}
+	return {"version": 2, "hours_run": hours_run, "day": day, "seed": seed_base,
+		"districts": districts.duplicate(true), "events": events.slice(-50),
+		"event_seq": event_seq}
 
 
+## Restores the ledger and, with it, the population the ledger was describing. A save from before
+## Part 12 has no residents bucket and no cohorts: the districts get the bucket backfilled from
+## what households already hold, and the population is re-seeded from the census rather than
+## silently simulating a year from an empty pyramid.
 func restore(s: Dictionary) -> bool:
 	if typeof(s) != TYPE_DICTIONARY or not s.has("districts"):
 		return false
@@ -464,7 +603,17 @@ func restore(s: Dictionary) -> bool:
 	seed_base = int(s.get("seed", seed_base))
 	districts = s["districts"]
 	events = s.get("events", [])
+	event_seq = int(s.get("event_seq", events.size()))
 	for n in districts.keys():
+		var d: Dictionary = districts[n]
+		if not d.has("resident_c"):
+			d["resident_c"] = int(d.get("house_c", 0)) / 15
+		for c in CATS:
+			var sh: Dictionary = d["shops"][c]
+			if not sh.has("i_rev_c"):
+				sh["i_rev_c"] = 0
+				sh["i_buys"] = 0
+		districts[n] = d
 		if not _streak.has(n):
 			_streak[n] = {}
 		for c in CATS:
@@ -474,6 +623,8 @@ func restore(s: Dictionary) -> bool:
 
 
 func stats() -> Dictionary:
-	return {"hours": hours_run, "day": day, "districts": districts.size(),
+	var out := {"hours": hours_run, "day": day, "districts": districts.size(),
 		"shops": total_shops(), "employed": total_employment(),
 		"money": money_total(), "events": events.size()}
+	out["congestion"] = trips.peak_congestion()
+	return out

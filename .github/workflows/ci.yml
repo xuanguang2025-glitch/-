@@ -80,8 +80,9 @@ jobs:
       - name: 城市模拟自测（区级经济 + 消费端接入）
         run: |
           timeout 900 "$GODOT" --headless --path . --quit-after 20000 -- --sim-test >sim.log 2>&1 || true
-          grep -E "^\[test\] FAIL|self-test" sim.log
+          grep -E "^\[test\] FAIL|^\[life\] FAIL|self-test" sim.log
           grep -q "city simulation self-test: PASS" sim.log
+          grep -qE "city life self-test: PASS \([0-9]{2,} checks, 0 failures\)" sim.log
 
       - name: 城市模拟年度浸泡（守恒 + 反塌缩）
         run: |

@@ -144,14 +144,26 @@ static func run(sim: CitySim, population: PopulationSystem, crowd: CrowdSystem,
 	food["price_c"] = price0
 
 	# Phase 111: snapshot, run far ahead, restore must land on the exact prior state.
+	# Part 12 turned that into a pair. The population layer writes the numbers the ledger reads, so
+	# restoring districts without the pyramid that produced them leaves a city whose census
+	# disagrees with its own districts - which is precisely what the life contract reports next.
 	var before := sim.state_hash()
 	var snap := sim.snapshot()
+	var life := LifeMount.of(sim.get_tree())
+	var lsnap := life.snapshot() if life != null else {}
 	sim.advance_hours(400)
-	_that("快照前后可完整还原", sim.restore(snap) and sim.state_hash() == before,
+	var rolled := sim.restore(snap) and sim.state_hash() == before
+	if rolled and life != null:
+		rolled = life.restore(lsnap) and rolled
+	_that("快照前后可完整还原（经济与人口一起）", rolled,
 		"%d vs %d" % [sim.state_hash(), before])
 
 	for f in [a, b, dry, wet]:
 		f.free()
+	## Part 12's living layers are verified by their own contract, on the same city, after this
+	## one has finished — the economy is measured on a clean ledger first, then the city is lived
+	## in. Its failures join this verdict so a broken population layer cannot pass the sim step.
+	_fails += LifeTests.run(sim, population, crowd, traffic)
 	print("=== city simulation self-test: %s (%d failures) ===" % [
 		"PASS" if _fails == 0 else "FAIL", _fails])
 	return _fails
