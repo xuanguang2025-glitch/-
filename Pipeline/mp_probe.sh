@@ -44,7 +44,7 @@ sleep 2
 ARGS=("--backend=http://127.0.0.1:$GW_PORT" "--mp-server=127.0.0.1:$GS_PORT" "--mp-probe")
 if [ -n "${MP_SHOT:-}" ]; then
   ARGS+=("--mp-shot=$MP_SHOT")
-  "$GODOT" --path . --resolution 1280x720 -- "${ARGS[@]}" --quit-after 20000 >"$LOG" 2>&1
+  "$GODOT" --path . --resolution 1280x720 --hidden -- "${ARGS[@]}" --quit-after 20000 >"$LOG" 2>&1
 else
   "$GODOT" --headless --path . -- "${ARGS[@]}" --quit-after 20000 >"$LOG" 2>&1
 fi

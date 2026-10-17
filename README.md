@@ -142,11 +142,15 @@ godot --headless --path . --quit-after 120 -- --create-test   # 创造系统 22 
 命令行截图与分相性能计时（用于视觉回归）：
 
 ```bash
-godot --path . --resolution 1280x720 -- \
+godot --path . --resolution 1280x720 --hidden -- \
   "--shots=2" "--shot-every=11" "--shot-dir=<绝对路径>" \
   "--time=10.0" "--spawn=1150,300"
 # 其他：--weather=<0..6>  --quality=<0..3>  --view=<pitch,yaw,lift>  --demo-build=<n>
 ```
+
+`--hidden` 不是可选项：这些步骤需要真实渲染，不能用 `--headless`，而不加 `--hidden` 就会每次弹一个
+抢焦点的窗口。`Pipeline/run.sh` 与 `Pipeline/mp_probe.sh` 已统一带上该参数（实测截图与可见窗口
+逐帧一致）。
 
 ## 控制
 

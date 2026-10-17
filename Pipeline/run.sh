@@ -9,6 +9,11 @@ cd "$(dirname "$0")/.."
 . Pipeline/lib.sh
 
 : "${GODOT:=/d/徐浩然/2026-08-29-21-56-21/.tools/Godot441_console.exe}"
+# Every windowed step below carries `--hidden`. The steps that need a real render target
+# (screenshots, benches, sim) cannot run `--headless`, and without this flag each one pops a
+# focus-stealing window onto the user's desktop roughly a dozen times per run. `--hidden` keeps
+# the Vulkan context and produces byte-comparable PNGs; do not remove it to "debug a blank shot",
+# compare against a visible-window run first.
 LOGDIR="Pipeline/logs"
 mkdir -p "$LOGDIR"
 RUNFAIL=0
@@ -50,7 +55,7 @@ BE=$(grep -ciE "^ERROR|SCRIPT ERROR" "$LOGDIR/boot.log" || true)
 say "3/10 功能自测"
 "$GODOT" --headless --path . --quit-after 150 -- --create-test >"$LOGDIR/create.log" 2>&1
 grep -q "creation self-test: PASS" "$LOGDIR/create.log" && echo "create-test: PASS" || { grep "FAIL" "$LOGDIR/create.log" | head -5; die "create-test"; }
-"$GODOT" --path . --resolution 1280x720 -- --validate-test --spawn=1150,300 >"$LOGDIR/validate.log" 2>&1
+"$GODOT" --path . --resolution 1280x720 --hidden -- --validate-test --spawn=1150,300 >"$LOGDIR/validate.log" 2>&1
 grep -q "validation self-test: PASS" "$LOGDIR/validate.log" && echo "validate-test: PASS" || { grep "FAIL" "$LOGDIR/validate.log" | head -5; die "validate-test"; }
 # The menu is driven through the same entry points a click uses (choose / set_quality) rather than
 # through the mouse, so a button that exists and does nothing fails here instead of in the field.
@@ -72,7 +77,7 @@ say "5/10 性能与压力"
 # the identical build, so one-shot timing measures whatever else the machine is doing.
 CM="" LM="" ALIVE=0 WANT=0 FREED=""
 for k in $(seq 1 "$PERF_SAMPLES"); do
-  "$GODOT" --path . --resolution 1280x720 -- "--shots=1" "--shot-every=20" \
+  "$GODOT" --path . --resolution 1280x720 --hidden -- "--shots=1" "--shot-every=20" \
     "--shot-dir=$(pwd -W 2>/dev/null || pwd)/$LOGDIR" --time=10.0 --spawn=1150,300 \
     >"$LOGDIR/perf$k.log" 2>&1
   v=$(sum_ms "$LOGDIR/perf$k.log"); [ -n "$v" ] && CM="$CM $v"
@@ -80,7 +85,7 @@ for k in $(seq 1 "$PERF_SAMPLES"); do
   ALIVE=$(printf '%s' "$p" | cut -d= -f2 | cut -d/ -f1)
   WANT=$(printf '%s' "$p" | cut -d/ -f2)
   f=$(num 'freed=[0-9]+' "$LOGDIR/perf$k.log"); [ -n "$f" ] && FREED="$FREED $f"
-  "$GODOT" --path . --resolution 1280x720 -- --bench-load --spawn=1150,300 \
+  "$GODOT" --path . --resolution 1280x720 --hidden -- --bench-load --spawn=1150,300 \
     >"$LOGDIR/load$k.log" 2>&1
   l=$(num 'in [0-9]+ ms' "$LOGDIR/load$k.log"); [ -n "$l" ] && LM="$LM $l"
 done
@@ -99,14 +104,14 @@ awk -v v="$CHUNK_MS" -v m="$MAX_CHUNK_BUILD_MS" 'BEGIN{exit !(v>m)}' && die "chu
 [ "$FREED_MAX" = "0" ] || die "出现 $FREED_MAX 次 chunk 卸载（重建抖动回归）"
 [ "$LOAD_MS" -le "$MAX_STREAM_MS" ] || die "流式耗时 ${LOAD_MS} ms 超门槛"
 
-"$GODOT" --path . --resolution 1280x720 -- "--bench-stress=$STRESS_OBJECTS" --spawn=1150,300 >"$LOGDIR/stress.log" 2>&1
+"$GODOT" --path . --resolution 1280x720 --hidden -- "--bench-stress=$STRESS_OBJECTS" --spawn=1150,300 >"$LOGDIR/stress.log" 2>&1
 grep -E "^\[stress\] placed|^\[stress\] result" "$LOGDIR/stress.log" || die "压力测试无输出"
 PLACED=$(num 'placed=[0-9]+' "$LOGDIR/stress.log")
 require "压力放置数" "$PLACED"
 [ "$PLACED" -ge $(( STRESS_OBJECTS * 9 / 10 )) ] || die "仅放置 $PLACED/$STRESS_OBJECTS 件"
 
 say "6/10 城市模拟闭环"
-"$GODOT" --path . --resolution 1280x720 -- --sim-test --spawn=1150,300 >"$LOGDIR/sim.log" 2>&1
+"$GODOT" --path . --resolution 1280x720 --hidden -- --sim-test --spawn=1150,300 >"$LOGDIR/sim.log" 2>&1
 grep -q "city simulation self-test: PASS" "$LOGDIR/sim.log" \
   || { grep "FAIL" "$LOGDIR/sim.log" | head -8; die "城市模拟自测"; }
 SA=$(count_pat '^\[test\] PASS' "$LOGDIR/sim.log")
@@ -119,7 +124,7 @@ grep -q "city life self-test: PASS" "$LOGDIR/sim.log" \
 LA=$(count_pat '^\[life\] PASS' "$LOGDIR/sim.log")
 require "城市生命断言数" "$LA"
 [ "$LA" -ge "$MIN_LIFE_ASSERTS" ] || die "城市生命断言仅 $LA 条（门槛 $MIN_LIFE_ASSERTS）"
-"$GODOT" --path . --resolution 1280x720 -- "--sim-soak=$SIM_SOAK_HOURS" --spawn=1150,300 \
+"$GODOT" --path . --resolution 1280x720 --hidden -- "--sim-soak=$SIM_SOAK_HOURS" --spawn=1150,300 \
   >"$LOGDIR/soak.log" 2>&1
 SOAK_LINE=$(grep -E '^\[soak\] hours' "$LOGDIR/soak.log")
 [ -n "$SOAK_LINE" ] || die "soak 无输出"
@@ -133,7 +138,7 @@ awk -v v="$PH" -v m="$MAX_SIM_HOUR_MS" 'BEGIN{exit !(v>m)}' \
 # The economy only counts as live if it advances while the world is being played, not merely
 # under a test flag, so this drives the clock across an hour boundary in a real session and
 # requires the tick to have happened.
-"$GODOT" --path . --resolution 1280x720 --quit-after 1500 -- --time=23.4 --spawn=1150,300 \
+"$GODOT" --path . --resolution 1280x720 --hidden --quit-after 1500 -- --time=23.4 --spawn=1150,300 \
   >"$LOGDIR/live.log" 2>&1
 LT=$(count_pat '^\[sim\] day' "$LOGDIR/live.log")
 require "实时推进次数" "$LT"

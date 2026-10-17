@@ -11,6 +11,14 @@ const DENSIFY := 12.0
 const SIDE_W := 4.2
 const LAMP_STEP := 52.0
 const PIER_STEP := 34.0
+## Box-girder section, in metres. A 延安高架 deck is a single-cell box roughly this proportion:
+## a 0.26 m wing slab at the edge, a 1.9 m deep cell in the middle, cantilevers of about 0.6 m.
+const SLAB_T := 0.26
+const GIRDER_D := 1.9
+const CANTILEVER := 0.62
+## Precast span length. The joint every 28 m is the detail that makes a long elevated road read
+## as assembled rather than extruded.
+const SPAN_STEP := 28.0
 const BRIDGE_Y := 9.0
 const WATER_Z := -0.55
 
@@ -137,13 +145,61 @@ func _viaduct(sub: PackedVector2Array, arcs: PackedFloat32Array, w: float, deck:
 	fusion.ribbon(sub, hw, deck, deck, asphalt, arcs)
 	var conc := Color(0.50, 0.495, 0.48)
 	conc.a = 4.0
+	## Two soffit tones, not one. The underside of a deck never sees the sun and only half a sky
+	## dome, so a soffit drawn at the same brightness as the fascia is what made the new section
+	## read as pale foam. The deep cell underside under the web is more occluded still.
+	var soffit := Color(0.265, 0.262, 0.258)
+	soffit.a = 4.0
+	var cell := Color(0.195, 0.193, 0.19)
+	cell.a = 4.0
 	var rail := Color(0.58, 0.59, 0.61)
 	rail.a = 4.0
-	_props.skirt(sub, hw, deck, deck - 1.3, conc, arcs, 1)
-	_props.skirt(sub, hw, deck, deck - 1.3, conc, arcs, -1)
+	## The section, not a wall. This used to be one flat 1.3 m skirt the full width, which is why
+	## every overpass read as an extruded ribbon: a real box girder has a thin cantilever slab at
+	## the deck edge, a web set back inboard of it, and a soffit narrower than the deck. Those
+	## four surfaces are two triangles per path segment each, so the section costs a fixed multiple
+	## of the old wall rather than a fixed number of primitives — over 142 km of deck that
+	## multiplier is the whole bill, which is why it is measured and recorded, not waved at.
+	_props.skirt(sub, hw, deck, deck - SLAB_T, conc, arcs, 1)
+	_props.skirt(sub, hw, deck, deck - SLAB_T, conc, arcs, -1)
+	_props.ribbon(sub, hw, deck - SLAB_T, deck - SLAB_T, soffit, arcs)
+	for side in [-1, 1]:
+		_props.skirt(sub, hw - CANTILEVER, deck - SLAB_T, deck - GIRDER_D, cell, arcs, side)
+	_props.ribbon(sub, hw - CANTILEVER, deck - GIRDER_D, deck - GIRDER_D, cell, arcs)
 	_piers(sub, deck, hw, conc)
+	_joints(sub, arcs, hw, deck)
 	for side in [-1, 1]:
 		_props.skirt(sub, hw - 0.25, deck + 1.15, deck - 0.05, rail, arcs, side)
+
+
+## Span joints and drainage spouts. The joint is what says a viaduct was built in 28 m segments
+## rather than extruded from one profile, and the spout is what says it has been raining for
+## twenty years - the stain under it is already free, because the prop shader streaks vertical
+## faces by world position. One solid per span, so the cost is set by the span length and not by
+## the densified path.
+func _joints(sub: PackedVector2Array, arcs: PackedFloat32Array, hw: float, deck: float) -> void:
+	var acc := 0.0
+	var joint := Color(0.235, 0.232, 0.23)
+	joint.a = 4.0
+	var steel := Color(0.40, 0.405, 0.42)
+	steel.a = 4.0
+	for i in range(1, sub.size()):
+		acc += sub[i - 1].distance_to(sub[i])
+		if acc < SPAN_STEP:
+			continue
+		acc = 0.0
+		var p: Vector2 = sub[i]
+		var dir := (sub[i] - sub[i - 1]).normalized()
+		var yaw := atan2(-dir.x, dir.y)
+		var rot := Basis.IDENTITY.rotated(Vector3.UP, yaw)
+		_props.box(Transform3D(rot, Vector3(p.x, deck - GIRDER_D + 0.10, p.y)),
+			Vector3((hw - CANTILEVER) * 2.0 + 0.12, GIRDER_D - 0.30, 0.24), joint)
+		var side := Vector2(-dir.y, dir.x)
+		var spout := Basis.IDENTITY.rotated(Vector3(dir.x, 0.0, dir.y).normalized(), PI * 0.5)
+		for s in [-1, 1]:
+			var q := p + side * (hw + 0.14) * float(s)
+			_props.cylinder(Transform3D(spout, Vector3(q.x, deck - SLAB_T - 0.35, q.y)),
+				0.085, 0.085, 0.34, steel, 5, false)
 
 
 func _bridge(sub: PackedVector2Array, arcs: PackedFloat32Array, w: float,
@@ -154,11 +210,17 @@ func _bridge(sub: PackedVector2Array, arcs: PackedFloat32Array, w: float,
 	fusion.ribbon(sub, hw, y0, y1, asphalt, arcs)
 	var conc := Color(0.50, 0.495, 0.48)
 	conc.a = 4.0
+	var soffit := Color(0.265, 0.262, 0.258)
+	soffit.a = 4.0
 	var rail := Color(0.60, 0.61, 0.63)
 	rail.a = 4.0
 	for side in [-1, 1]:
 		_sloped_wall(sub, hw, y0, y1, 0.0, -1.6, side, conc)
 		_sloped_wall(sub, hw - 0.25, y0, y1, 1.15, 0.0, side, rail)
+	## BUG-004 on the bridge side: the spandrel walls stopped 1.6 m below the deck but nothing
+	## closed the gap, so from the towpath you looked straight through the carriageway and saw the
+	## topside lane markings from underneath. One parallel ribbon at the wall toe seals it.
+	_props.ribbon(sub, hw, y0 - 1.6, y1 - 1.6, soffit, arcs)
 	# Piers down to the bed at intervals along the span.
 	var n := maxi(int(float(sub.size()) / 14.0), 2)
 	for k in range(1, n):
@@ -209,12 +271,23 @@ func _piers(sub: PackedVector2Array, deck: float, hw: float, conc: Color) -> voi
 		var rot := Basis.IDENTITY.rotated(Vector3.UP, yaw)
 		# Twin columns straddling the carriageway with a crosshead, the standard Shanghai
 		# viaduct bent — a single narrow leg reads as a signpost, not a bridge pier.
+		var col_h := maxf(deck - GIRDER_D - 0.90, 1.0)
 		for s in [-1, 1]:
 			var q := p + side * (hw * 0.62) * float(s)
+			_props.box(Transform3D(rot, Vector3(q.x, 0.55, q.y)),
+				Vector3(1.3, col_h, 1.9), conc)
+			## Footing. A column that meets the pavement at its own width reads as a pole stuck
+			## in the ground; a bent sits on a pad that spreads the load into a plinth.
 			_props.box(Transform3D(rot, Vector3(q.x, 0.0, q.y)),
-				Vector3(1.3, maxf(deck - 1.6, 1.0), 1.9), conc)
-		_props.box(Transform3D(rot, Vector3(p.x, deck - 1.55, p.y)),
+				Vector3(2.0, 0.55, 2.6), conc)
+		_props.box(Transform3D(rot, Vector3(p.x, deck - GIRDER_D - 0.90, p.y)),
 			Vector3(hw * 2.2, 0.9, 1.5), conc)
+		## Bearing shelf: a thin darker plate between crosshead top and girder soffit, so the deck
+		## sits on the bent instead of growing out of it.
+		var pad := Color(0.20, 0.20, 0.21)
+		pad.a = 4.0
+		_props.box(Transform3D(rot, Vector3(p.x, deck - GIRDER_D - 0.10, p.y)),
+			Vector3(hw * 2.0, 0.12, 1.25), pad)
 
 
 func _lamps(sub: PackedVector2Array, off: float) -> void:

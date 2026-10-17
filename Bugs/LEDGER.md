@@ -8,7 +8,7 @@ Part 6 Phase 38。规则：**缺陷必须变成可重跑的断言**，否则它�
 | BUG-001 | 分相计时器把样本计数按阶段累加，所有每-chunk 均值被低估 4 倍 | green | `Pipeline/run.sh` 第 5 步；`[prof]` 四阶段之和须与门槛同量级 |
 | BUG-002 | 单 chunk 构建 17.9 ms，仍是 7 ms 帧预算的 2.5 倍 | **red** | `Pipeline/run.sh`；`grep '\[prof\]' Pipeline/logs/perf.log` |
 | BUG-003 | chunk 节点被平移到 chunk 中心，而网格顶点是世界绝对坐标 → 整座城市按离原点距离成比例渲染位移，碰撞却正确 | green | `Pipeline/run.sh`；`--validate-test` 的 "found an occupied spot" 依赖渲染与碰撞一致 |
-| BUG-004 | 高架 / 桥 underside 可见顶面车道标线 | **red** | 桥下仰拍固定机位截图（尚无自动断言） |
+| BUG-004 | 高架 / 桥 underside 可见顶面车道标线 | **red**（高架侧已修，跨河桥侧无图证） | 固定机位 `--time=11.4 --spawn=1150,486 --view=0.22,0.0,6.5`：改前仰拍透过桥体看到黄双线与白色虚线，改后为闭合箱梁混凝土底面。跨河桥 `_bridge` 已补梁底带，但两个候选机位都拍不到改前穿透画面，故整条不结案 |
 | BUG-005 | 开启降水粒子拖尾后 FPS 由 51 掉到 23 | **red** | `--weather=4` 对比 `--weather=0` 的 `fps=` |
 | BUG-006 | 玩家可在水面上行走，无水体阻挡 | **red** | `--spawn=1530,0` 后按 W |
 | BUG-007 | `in_water` 走 25 m 量化格，岸边判定可错 25 m，曾使出生点落进黄浦江 | green | `--validate-test`：`river refused` / `mud bank refused` |

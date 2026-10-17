@@ -17,6 +17,7 @@
 | P3 | 第三人称角色 + VehicleBody3D 汽车 | 已实现 | 稳态 45-55 FPS，出生点自动落在地面道路上 |
 | P4 | NPC 人群 + 车流（职业/作息驱动的行人档案） | 已实现 | 行人 478 / 车辆 65，HUD 显示姓名·年龄·职业·心情 |
 | 画质 | 近景形状：行道树、行人步态、玩家角色 | 部分实现 | 悬铃木改为截头树形（根颈/树干/截头瘤/3 主枝/5-6 分色冠团），行人为四相位自主步态 + 两节四肢，玩家躯干由胶囊改为胸-腰-胯分件且关节落在节点原点；同机位改前/改后截图，全城面数 702k→770k、FPS 58-69。仍无风、无踝关节、无面部手指（KNOWN_ISSUES 4a） |
+| 画质 | 高架桥体断面：箱梁 / 伸缩缝 / 排水嘴 / 墩基础 | 部分实现 | 侧向由一整块 1.3 m 平墙改为闭合单室箱梁（翼缘板缝 + 梁底 + 收进 0.62 m 腹板 + 主梁底），每 28 m 一道横隔梁与两支排水嘴，墩柱补扩大基础/盖梁重坐/暗色支座垫板；同机位 `--spawn=1150,486 --view=0.22,0.0,6.5` 改前可**透过桥体看见顶面标线**（BUG-004），改后底面为混凝土。全局道路构件网格 193 376→398 988 面（142.4 km，1.36→2.80 面/米），仍单 draw call。**梁底仍偏亮**：天空环境光降到 0.22 倍整帧亮度小数点后四位不变（SDFGI 开启时 ambient 不参与成像，该改法已回退），根因是 SDFGI 探针分辨不了 1.9 m 箱室；跨河桥 `_bridge` 补了梁底带但**无图证**，BUG-004 不结案 |
 | P4 | 红绿灯 / 行人让行规则 | 待实现 | — |
 | P5 | 昼夜循环 | 已实现 | 12:24 / 19:18 / 20:30 三组截图 |
 | P5 | 天气（雨/雾/台风） | 部分实现 | GPUParticles3D 降水+拖尾已接，未做车窗雨滴/路面积水 |
@@ -195,12 +196,14 @@ GODOT="/d/徐浩然/2026-08-29-21-56-21/.tools/Godot441_console.exe"
 "$GODOT" --path .                                           # 直接运行
 "$GODOT" --headless --path . --quit-after 60 -- --census    # 无窗口普查
 "$GODOT" --headless --path . --quit-after 120 -- --create-test   # 创造系统 22 项断言
-"$GODOT" --path . --resolution 1280x720 -- "--shots=1" "--shot-every=12" \
+"$GODOT" --path . --resolution 1280x720 --hidden -- "--shots=1" "--shot-every=12" \
     "--shot-dir=<abs>" "--time=19.6" "--spawn=880,700" "--view=-0.22,0.7,26" \
     "--demo-build=6"                                        # 截图：玩家作品 + 编辑器 UI
 # 其他开关：--weather=<0..6>  --quality=<0..3>
-"$GODOT" --path . --resolution 1280x720 -- "--shots=2" "--shot-every=11" \
+"$GODOT" --path . --resolution 1280x720 --hidden -- "--shots=2" "--shot-every=11" \
     "--shot-dir=<abs>" "--time=10.0" "--spawn=1150,300"     # 截图 + 分相计时
+# --hidden 必带：这些步骤要真实渲染，不能 --headless；不带就会每次弹一个抢焦点的窗口。
+# 实测带 --hidden 与可见窗口的截图逐帧一致（PNG 体积差 <0.1%）。
 # 其他开关：--weather=<0..6>  --quality=<0..3>  --view=<pitch,yaw,lift>  --demo-build=<n>
 #          --validate-test（需已流式到位的 chunk，窗口模式）
 #          --bench-load  --bench-stress=<n>
