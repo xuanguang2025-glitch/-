@@ -81,6 +81,41 @@ static func run(root) -> int:
 	n += 1
 	menu.close_menu()
 
+	# The off-by-one that made 退出 a dead button: the labels lived in an inline array while the
+	# indices lived in constants, three buttons were built for four constants, and 退出 dispatched
+	# index 2 into a binding table that only had 0 and 1. Nothing here quits, so the guard is
+	# structural — the row displayed at QUIT must be the row that says 退出.
+	fails += _that("退出按钮确实坐在 QUIT 索引上（曾错位一格而空转）",
+		menu.button_at(MainMenu.QUIT) != null
+		and menu.entry_label(MainMenu.QUIT) == "退出"
+		and menu.row_count() == MainMenu.ENTRIES.size(),
+		"rows=%d 退出=%s" % [menu.row_count(), menu.entry_label(MainMenu.QUIT)])
+	n += 1
+	fails += _that("每个入口都有可点的行", menu.button_at(MainMenu.RESUME) != null
+		and menu.button_at(MainMenu.NEW_GAME) != null
+		and menu.button_at(MainMenu.NET) != null, "有入口没有对应按钮")
+	n += 1
+
+	# 联机 must be a real attempt, and a failed attempt has to say why. Headless here there is no
+	# --backend, so the honest outcome is failure with a reason — the bug this guards against is
+	# the silent kind, where the button exists, the call returns, and nothing anywhere records
+	# that the player never got online.
+	var ns = root.get_tree().get_first_node_in_group("net_session")
+	fails += _that("联机入口接到真的会话对象上", ns != null, "找不到 net_session")
+	n += 1
+	if ns != null:
+		fails += _that("未连接时不谎报余额（-1 = 服务器还没说过）", int(ns.balance()) < 0,
+			"balance=%d" % int(ns.balance()))
+		n += 1
+		var ok_join: bool = ns.join("127.0.0.1", 9876)
+		fails += _that("没有后端时联机失败而不是静默成功", not ok_join, "竟然返回 true")
+		n += 1
+		fails += _that("失败原因被留下并可显示", not String(ns.detail).is_empty()
+			and String(ns.detail).find("后端") >= 0, "detail=%s" % String(ns.detail))
+		n += 1
+		fails += _that("失败的会话不留下半个客户端", ns.client == null, "留下了 client 节点")
+		n += 1
+
 	print("=== main menu self-test: %s (%d checks, %d failures) ===" % [
 		"PASS" if fails == 0 else "FAIL", n, fails])
 	return fails

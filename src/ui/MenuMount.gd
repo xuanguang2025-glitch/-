@@ -19,7 +19,7 @@ static func mount(host: Node, creation, streamer, player, spawn: Vector2) -> Mai
 	menu.bind(MainMenu.NEW_GAME, func() -> void: new_game(creation, player, spawn))
 	menu.bind_quality(func() -> void: streamer.set_origin(streamer.origin_of_interest))
 	menu.entry_chosen.connect(func(i: int) -> void:
-		GameGlobals.hud_message.emit(["继续", "新游戏", "退出"][i], 2.0))
+		GameGlobals.hud_message.emit(MainMenu.ENTRIES[i], 2.0))
 	host.add_child(menu)
 	host.menu = menu
 	return menu

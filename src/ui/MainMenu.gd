@@ -1,14 +1,18 @@
 class_name MainMenu
 extends CanvasLayer
-## Phase 122 / 123: the boot screen, and the reason the desktop shortcut is usable.
-##
-## Four entries, each of which has to be backed by a system that already exists — a menu item
+## Five entries, each of which has to be backed by a system that already exists — a menu item
 ## that only prints "功能开发中" is exactly the placeholder the spec forbids:
 ##   继续    the world is already loaded behind this layer, so resuming means hiding the overlay
 ##   新游戏  clears the player layer through CreationSystem.clear_all and writes the emptied save,
 ##           so the next 继续 genuinely has nothing to restore
+##   联机    NetSession.toggle, which builds a real MultiplayerClient inside the running game
 ##   画质    QualityPresets.set_tier, the same four tiers the streaming gates measure against
 ##   退出    SceneTree.quit
+##
+## `ENTRIES` is the single source of truth for label and index because the previous version kept
+## the labels in an inline array literal and the indices in constants, and they drifted: three
+## buttons were built for four constants, so 退出 sat at index 2 while QUIT was 3 and pressing it
+## dispatched an index nothing had bound. A list that cannot disagree with itself is the fix.
 ##
 ## Deliberately does NOT pause the scene tree. The streaming, crowd, traffic and simulation
 ## systems keep running underneath, which is what lets the automated gates keep waiting on
@@ -23,13 +27,16 @@ signal closed
 
 const RESUME := 0
 const NEW_GAME := 1
+const NET := 2
 const QUIT := 3
+const ENTRIES := ["继续", "新游戏（清空我的城市层）", "联机", "退出"]
 
 var actions: Dictionary = {}		# entry index -> Callable
 var quality_cb: Callable
 
 var _root: PanelContainer
 var _rows: Array = []
+var _net_row: Button
 var _quality_labels: Array = []
 var _open := true
 
@@ -65,11 +72,13 @@ func _ready() -> void:
 	col.add_child(sub)
 
 	col.add_child(_sep())
-	for i in 3:
-		var b := _button(["继续", "新游戏（清空我的城市层）", "退出"][i])
+	for i in ENTRIES.size():
+		var b := _button(ENTRIES[i])
 		b.pressed.connect(func() -> void: choose(i))
 		col.add_child(b)
 		_rows.append(b)
+		if i == NET:
+			_net_row = b
 
 	col.add_child(_sep())
 	var qtitle := Label.new()
@@ -84,6 +93,11 @@ func _ready() -> void:
 
 	add_child(_root)
 	_layout()
+	# The 联机 label has to follow the session, not the last time the menu happened to be built:
+	# a connect can land while the panel is open, and a button that still says "联机" after it
+	# succeeded is the same kind of lie as one that does nothing.
+	NetSession.state_changed.connect(func(_s: int) -> void: _refresh())
+	NetSession.balance_changed.connect(func(_c: int) -> void: _refresh())
 	_refresh()
 
 
@@ -115,11 +129,30 @@ func choose(index: int) -> void:
 	if index == QUIT:
 		get_tree().quit()
 		return
+	# 联机 talks to an autoload rather than a bound callback, the same way 画质 does: the session
+	# is a live thing whose label has to change under its own steam, and a binding would only
+	# give the menu a stale snapshot of it.
+	if index == NET:
+		NetSession.toggle()
+		_refresh()
+		return
 	if not actions.has(index):
 		return
 	actions[index].call()
 	if index == RESUME:
 		close_menu()
+
+
+func entry_label(index: int) -> String:
+	return ENTRIES[index] if index >= 0 and index < ENTRIES.size() else ""
+
+
+func row_count() -> int:
+	return _rows.size()
+
+
+func button_at(index: int) -> Button:
+	return _rows[index] if index >= 0 and index < _rows.size() else null
 
 
 func close_menu() -> void:
@@ -146,6 +179,9 @@ func _refresh() -> void:
 		var lbl: Button = _quality_labels[t]
 		lbl.text = ("%s  ●" % QualityPresets.tier_name(t)) if t == QualityPresets.tier \
 			else QualityPresets.tier_name(t)
+	if _net_row != null:
+		_net_row.text = "断开（%s）" % NetSession.state_label() if NetSession.client != null \
+			else "联机  ·  %s" % NetSession.state_label()
 
 
 func _button(text: String) -> Button:

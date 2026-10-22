@@ -12,7 +12,6 @@ signal vehicle_exited(vehicle: Node)
 signal build_object_placed(record: Dictionary)
 signal build_object_removed(id: int)
 signal build_selection_changed(record: Dictionary)
-signal economy_changed(cash: float)
 signal landmark_discovered(name: String)
 signal hud_message(text: String, duration: float)
 
@@ -55,7 +54,10 @@ var weather_intensity: float = 0.0
 ## it - that edge is a compile-time class cycle - and the HUD already takes time and weather from
 ## this autoload rather than from a second source.
 var life: Dictionary = {}
-var cash: float = 250000.0
+## Deliberately no wallet here. `cash = 250000` used to live on this line: nothing ever wrote to
+## it and nothing ever read it except the HUD, so the player watched a fixed fortune that no
+## purchase could reduce while the server ledger charged them for every building. The only money
+## the client displays is the balance the server stated — see the NetSession autoload.
 var discovered: Dictionary = {}
 
 
@@ -140,11 +142,6 @@ func set_weather(kind: int, intensity: float = 1.0) -> void:
 	weather_kind = kind
 	weather_intensity = clampf(intensity, 0.0, 1.0)
 	weather_changed.emit(weather_kind, weather_intensity)
-
-
-func add_cash(amount: float) -> void:
-	cash += amount
-	economy_changed.emit(cash)
 
 
 func say(text: String, duration: float = 3.0) -> void:

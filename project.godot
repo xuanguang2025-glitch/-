@@ -15,6 +15,7 @@ boot_splash/show_image=false
 GameGlobals="*res://src/core/GameGlobals.gd"
 CityData="*res://src/city/CityData.gd"
 QualityPresets="*res://src/core/QualityPresets.gd"
+NetSession="*res://src/net/NetSession.gd"
 
 [display]
 

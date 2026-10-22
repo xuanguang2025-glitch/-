@@ -61,8 +61,8 @@ func feed(delta: float, s: Dictionary) -> void:
 	lines.append("")
 	lines.append("位置 %.0f, %.0f  %s" % [pos.x, pos.z, dist["name"]])
 	lines.append("时刻 %02d:%02d   夜间因子 %.2f" % [hh, mm, night])
-	lines.append("天气 %s %.0f%%   现金 %.0f" % [_weather(), GameGlobals.weather_intensity * 100.0,
-		GameGlobals.cash])
+	lines.append("天气 %s %.0f%%   %s" % [_weather(), GameGlobals.weather_intensity * 100.0,
+		_wallet()])
 	var npc: Dictionary = s.get("npc", {})
 	var cars: Dictionary = s.get("cars", {})
 	lines.append("行人 %d   车辆 %d   隐蔽 %d   高峰 %.0f%%" % [
@@ -116,6 +116,16 @@ func feed(delta: float, s: Dictionary) -> void:
 func _weather() -> String:
 	var names := {0: "晴", 1: "多云", 2: "阴", 3: "小雨", 4: "暴雨", 5: "雾", 6: "台风"}
 	return names.get(GameGlobals.weather_kind, "?")
+
+
+## The wallet line. Until now this printed 250000 — a constant nothing in the codebase had ever
+## written to, so the player watched a number that could not go down while the server ledger
+## quietly charged them for every building. There is no local money any more: either the server
+## has stated a balance, or the line says it has not.
+func _wallet() -> String:
+	if NetSession.balance() < 0:
+		return "现金 服务器未入账（%s）" % NetSession.state_label()
+	return "现金 %.2f 元（服务器账本）" % NetSession.yuan()
 
 
 func _k(n: int) -> String:
