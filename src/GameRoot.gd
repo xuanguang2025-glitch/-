@@ -210,9 +210,7 @@ func _ready() -> void:
 	sim = CitySim.new()
 	sim.name = "CitySim"
 	add_child(sim)
-	sim.configure(
-		func() -> float: return GameGlobals.time_of_day,
-		rig.wet_factor,
+	sim.configure(func() -> float: return GameGlobals.time_of_day, rig.wet_factor,
 		func(h: float) -> float: return population.active_share(h))
 	sim.bootstrap(population)
 	LifeMount.mount(self, sim, population)		# Part 12: 人口/消费/新闻，订阅 sim.ticked
@@ -242,6 +240,8 @@ func _ready() -> void:
 	add_child(player)
 	player.yaw = SPAWN_YAW
 	player.cam_pivot.rotation.y = SPAWN_YAW
+	# Part 16 第一阶段：任务层要站在**解算后**的出生点前方——出生点会因地面道路搜索而移动。
+	QuestMount.mount(self, sim, spawn, SPAWN_YAW)
 
 	car = Car.new()
 	car.name = "Car_01"

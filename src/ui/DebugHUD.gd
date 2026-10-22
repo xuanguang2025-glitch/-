@@ -85,6 +85,16 @@ func feed(delta: float, s: Dictionary) -> void:
 		var head := String(lf.get("head", ""))
 		if head != "":
 			lines.append("新闻：%s" % head)
+	var q := QuestMount.of(get_tree())
+	if q != null:
+		lines.append(q.status_line())
+		# The interaction prompt is the only affordance the quest layer has, so it has to say what
+		# pressing E would do, not just that something is nearby.
+		var inter := get_tree().get_first_node_in_group("interactions") as InteractionSystem
+		if inter != null:
+			var it := inter.nearest()
+			if not it.is_empty():
+				lines.append("E  与 %s 交谈" % String(it["name"]))
 	var who: Dictionary = npc.get("who", {})
 	if not who.is_empty():
 		var prof: NPCProfile = who["prof"]

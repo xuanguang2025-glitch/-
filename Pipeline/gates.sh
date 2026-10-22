@@ -34,6 +34,7 @@ MAX_SIM_HOUR_MS=1.0
 MIN_SIM_ASSERTS=25        # dropping an assertion must fail the gate, not quietly raise the average
 # Part 12: 城市生命层（人口队列 / 个体消费入账 / 出行需求与拥堵 / 状态驱动新闻）。
 MIN_LIFE_ASSERTS=30       # 实测 49 条；低于此门槛说明城市生命层有一块不再被验证
+MIN_QUEST_ASSERTS=30      # 实测 32 条：任务状态机 / 奖励幂等 / 存档往返 / 交互越权 / 自测不写玩家存档
 MIN_MENU_ASSERTS=17       # 实测 18 条：含"退出按钮坐在 QUIT 索引上"与联机失败必须留原因
 MIN_MP_ASSERTS=16         # 10b: two real clients; replication rendered, economy server-owned
 SIM_LIVE_MIN_HOURS=1      # a real session crossing an hour boundary must tick the economy

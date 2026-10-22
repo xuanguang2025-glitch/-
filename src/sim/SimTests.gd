@@ -164,6 +164,10 @@ static func run(sim: CitySim, population: PopulationSystem, crowd: CrowdSystem,
 	## one has finished — the economy is measured on a clean ledger first, then the city is lived
 	## in. Its failures join this verdict so a broken population layer cannot pass the sim step.
 	_fails += LifeTests.run(sim, population, crowd, traffic)
+	## Part 16's first playable loop is verified last, on the same mounted world: it accepts a
+	## quest, walks the objectives, settles it against the ledger and reloads from disk. It runs
+	## after everything else because it moves the player and rewrites user://quests.json.
+	_fails += QuestTests.run(sim.get_tree())
 	print("=== city simulation self-test: %s (%d failures) ===" % [
 		"PASS" if _fails == 0 else "FAIL", _fails])
 	return _fails

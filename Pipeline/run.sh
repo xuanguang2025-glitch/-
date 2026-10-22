@@ -124,6 +124,13 @@ grep -q "city life self-test: PASS" "$LOGDIR/sim.log" \
 LA=$(count_pat '^\[life\] PASS' "$LOGDIR/sim.log")
 require "城市生命断言数" "$LA"
 [ "$LA" -ge "$MIN_LIFE_ASSERTS" ] || die "城市生命断言仅 $LA 条（门槛 $MIN_LIFE_ASSERTS）"
+# Part 16: the first playable loop. Counted separately for the same reason the life layer is:
+# a quest system that stops being exercised cannot be covered by the economy still passing.
+grep -q "quest self-test: PASS" "$LOGDIR/sim.log" \
+  || { grep "^\[quest\] FAIL" "$LOGDIR/sim.log" | head -8; die "任务系统自测"; }
+QA=$(count_pat '^\[quest\] PASS' "$LOGDIR/sim.log")
+require "任务断言数" "$QA"
+[ "$QA" -ge "$MIN_QUEST_ASSERTS" ] || die "任务断言仅 $QA 条（门槛 $MIN_QUEST_ASSERTS）"
 "$GODOT" --path . --resolution 1280x720 --hidden -- "--sim-soak=$SIM_SOAK_HOURS" --spawn=1150,300 \
   >"$LOGDIR/soak.log" 2>&1
 SOAK_LINE=$(grep -E '^\[soak\] hours' "$LOGDIR/soak.log")
